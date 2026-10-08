@@ -203,9 +203,19 @@ private:
               call->args[12]},
              annotations);
 
+    // L1TilePlan reserves kL0Stages L0A/L0B slots per sub-K step; expose that
+    // intent so AutoSchedule may multi-buffer the l0a/l0b tiles across sk
+    // iterations (Z3SchedulePythonLoop bounds automatic buffer versions by the
+    // loop's num_stages annotation, defaulting to 1).
+    Map<String, ObjectRef> loop_annotations;
+    if (multi_step) {
+      loop_annotations.Set("num_stages",
+                           IntImm(DataType::Int(32), kL0Stages));
+    }
     For loop(sk, IntImm(DataType::Int(32), 0),
              IntImm(DataType::Int(32), plan.sub_k), ForKind::kSerial,
-             SeqStmt({copy_a, copy_b, Evaluate(mad)}));
+             SeqStmt({copy_a, copy_b, Evaluate(mad)}),
+             /*thread_binding=*/std::nullopt, /*annotations=*/loop_annotations);
     return loop;
   }
 
