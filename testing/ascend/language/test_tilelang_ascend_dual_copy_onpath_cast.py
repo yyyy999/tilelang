@@ -161,9 +161,12 @@ def test_onpath_cast_unit_flag_clears_on_last_pipe(dst_dtype, split):
     source = _kernel_source(gemm_dual_copy(dst_dtype, split, unit_flag_ctrl=3))
     tails = _cc_to_ub_tails(source)
     assert len(tails) == 2, source
-    # Non-last FixPipe demotes 3 → 2 (CHECK_ONLY) so Cube cannot reuse L0C
-    # until the second half-copy's CHECK_AND_CLEAR (3) completes.
-    assert tails[0][3] == "2", tails
+    # M-split pipes share N-column UnitFlags, so only the last pipe clears.
+    # N-split pipes read disjoint columns and each must clear its own half.
+    if split == "N":
+        assert tails[0][3] == "3", tails
+    else:
+        assert tails[0][3] == "2", tails
     assert tails[1][3] == "3", tails
 
 
@@ -481,7 +484,10 @@ def test_onpath_dual_dynamic_over_half_tail_uses_tile_half(split):
         assert pipe0_inner == tile_half, (pipe0_inner, source)
         assert pipe1_inner != tile_half and "max" in pipe1_inner, (pipe1_inner, source)
     assert tails[0][1] == "0" and tails[1][1] == "1", tails
-    assert tails[0][3] == "2" and tails[1][3] == "3", tails
+    if split == "N":
+        assert tails[0][3] == "3" and tails[1][3] == "3", tails
+    else:
+        assert tails[0][3] == "2" and tails[1][3] == "3", tails
     assert args[0][1] != args[1][1], (args[0][1], args[1][1], source)
     assert "+" in args[1][1], (args[1][1], source)
     # Full-width M-prefix still walks the 256-row L0C NZ pitch, not the copied 192.
