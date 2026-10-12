@@ -27,65 +27,83 @@ def _src_strides(source):
     return [_unwrap_c_api_arg(args[5]) for args in _cc_to_ub_argument_lists(source)]
 
 
-def _l0_producer(alloc_m, alloc_n, region_m, region_n, k, out_dtype, body):
-    """L0 GEMM writes ``acc[:region_m, :region_n]`` inside a larger L0C."""
-
-    @T.prim_func
-    def main(
-        A: T.Buffer((region_m, k), "float16"),
-        B: T.Buffer((region_n, k), "float16"),
-        C: T.Buffer((region_m, region_n), out_dtype),
-    ):
-        with T.Kernel(1):
-            a_l1 = T.alloc_l1((region_m, k), "float16")
-            b_l1 = T.alloc_l1((region_n, k), "float16")
-            a_l0 = T.alloc_l0a((region_m, k), "float16")
-            b_l0 = T.alloc_l0b((region_n, k), "float16")
-            acc = T.alloc_l0c((alloc_m, alloc_n), "float32")
-            T.copy(A, a_l1)
-            T.copy(B, b_l1)
-            T.copy(a_l1, a_l0)
-            T.copy(b_l1, b_l0)
-            T.gemm(
-                a_l0,
-                b_l0,
-                acc[0:region_m, 0:region_n],
-                transpose_B=True,
-                clear_accum=True,
-            )
-            body(acc, C)
-
-    return main
+def _assert_stride(func, expected):
+    source = _kernel_source(func)
+    strides = _src_strides(source)
+    assert strides, source
+    assert set(strides) == {expected}, (strides, source)
 
 
 def test_full_n_compact_mad_uses_producer_m_pitch():
     """64x64 L0C, MAD writes 32x64. Stride stays 32 for copy and both duals."""
+    alloc_m, alloc_n, m, n, k = 64, 64, 32, 64, 32
 
-    def copy_body(acc, output):
-        ub = T.alloc_shared((32, 64), "float32")
-        T.copy(acc[0:32, 0:64], ub)
-        T.copy(ub, output)
+    @T.prim_func
+    def copy_fp32(
+        A: T.Buffer((m, k), "float16"),
+        B: T.Buffer((n, k), "float16"),
+        C: T.Buffer((m, n), "float32"),
+    ):
+        with T.Kernel(1):
+            a_l1 = T.alloc_l1((m, k), "float16")
+            b_l1 = T.alloc_l1((n, k), "float16")
+            a_l0 = T.alloc_l0a((m, k), "float16")
+            b_l0 = T.alloc_l0b((n, k), "float16")
+            acc = T.alloc_l0c((alloc_m, alloc_n), "float32")
+            ub = T.alloc_shared((m, n), "float32")
+            T.copy(A, a_l1)
+            T.copy(B, b_l1)
+            T.copy(a_l1, a_l0)
+            T.copy(b_l1, b_l0)
+            T.gemm(a_l0, b_l0, acc[0:m, 0:n], transpose_B=True, clear_accum=True)
+            T.copy(acc[0:m, 0:n], ub)
+            T.copy(ub, C)
 
-    def dual_fp32_body(acc, output):
-        ub = T.alloc_shared((16, 64), "float32")
-        T.dual_copy(acc[0:32, 0:64], ub)
-        T.dual_copy(ub, output)
+    @T.prim_func
+    def dual_fp32(
+        A: T.Buffer((m, k), "float16"),
+        B: T.Buffer((n, k), "float16"),
+        C: T.Buffer((m, n), "float32"),
+    ):
+        with T.Kernel(1):
+            a_l1 = T.alloc_l1((m, k), "float16")
+            b_l1 = T.alloc_l1((n, k), "float16")
+            a_l0 = T.alloc_l0a((m, k), "float16")
+            b_l0 = T.alloc_l0b((n, k), "float16")
+            acc = T.alloc_l0c((alloc_m, alloc_n), "float32")
+            ub = T.alloc_shared((m // 2, n), "float32")
+            T.copy(A, a_l1)
+            T.copy(B, b_l1)
+            T.copy(a_l1, a_l0)
+            T.copy(b_l1, b_l0)
+            T.gemm(a_l0, b_l0, acc[0:m, 0:n], transpose_B=True, clear_accum=True)
+            T.dual_copy(acc[0:m, 0:n], ub)
+            T.dual_copy(ub, C)
 
-    def dual_fp16_body(acc, output):
-        ub = T.alloc_shared((16, 64), "float16")
-        T.dual_copy(acc[0:32, 0:64], ub)
-        T.dual_copy(ub, output)
+    @T.prim_func
+    def dual_fp16(
+        A: T.Buffer((m, k), "float16"),
+        B: T.Buffer((n, k), "float16"),
+        C: T.Buffer((m, n), "float16"),
+    ):
+        with T.Kernel(1):
+            a_l1 = T.alloc_l1((m, k), "float16")
+            b_l1 = T.alloc_l1((n, k), "float16")
+            a_l0 = T.alloc_l0a((m, k), "float16")
+            b_l0 = T.alloc_l0b((n, k), "float16")
+            acc = T.alloc_l0c((alloc_m, alloc_n), "float32")
+            ub = T.alloc_shared((m // 2, n), "float16")
+            T.copy(A, a_l1)
+            T.copy(B, b_l1)
+            T.copy(a_l1, a_l0)
+            T.copy(b_l1, b_l0)
+            T.gemm(a_l0, b_l0, acc[0:m, 0:n], transpose_B=True, clear_accum=True)
+            T.dual_copy(acc[0:m, 0:n], ub)
+            T.dual_copy(ub, C)
 
-    cases = (
-        (copy_body, "float32"),
-        (dual_fp32_body, "float32"),
-        (dual_fp16_body, "float16"),
-    )
-    for body, out_dtype in cases:
-        source = _kernel_source(_l0_producer(64, 64, 32, 64, 32, out_dtype, body))
-        strides = _src_strides(source)
-        assert strides, source
-        assert set(strides) == {"32"}, (strides, source)
+    _assert_stride(copy_fp32, "32")
+    _assert_stride(dual_fp32, "32")
+    _assert_stride(dual_fp16, "32")
 
 
 def test_prefix_of_full_gemm_keeps_producer_pitch():
@@ -116,13 +134,30 @@ def test_prefix_of_full_gemm_keeps_producer_pitch():
 
 def test_n_split_compact_second_half_uses_producer_pitch():
     """64x128 L0C, compact 32x64 MAD, N-split into 32x32. Second half is +1024."""
+    alloc_m, alloc_n, m, n, k = 64, 128, 32, 64, 32
 
-    def body(acc, output):
-        ub = T.alloc_shared((32, 32), "float16")
-        T.dual_copy(acc[0:32, 0:64], ub)
-        T.dual_copy(ub, output)
+    @T.prim_func
+    def main(
+        A: T.Buffer((m, k), "float16"),
+        B: T.Buffer((n, k), "float16"),
+        C: T.Buffer((m, n), "float16"),
+    ):
+        with T.Kernel(1):
+            a_l1 = T.alloc_l1((m, k), "float16")
+            b_l1 = T.alloc_l1((n, k), "float16")
+            a_l0 = T.alloc_l0a((m, k), "float16")
+            b_l0 = T.alloc_l0b((n, k), "float16")
+            acc = T.alloc_l0c((alloc_m, alloc_n), "float32")
+            ub = T.alloc_shared((m, n // 2), "float16")
+            T.copy(A, a_l1)
+            T.copy(B, b_l1)
+            T.copy(a_l1, a_l0)
+            T.copy(b_l1, b_l0)
+            T.gemm(a_l0, b_l0, acc[0:m, 0:n], transpose_B=True, clear_accum=True)
+            T.dual_copy(acc[0:m, 0:n], ub)
+            T.dual_copy(ub, C)
 
-    source = _kernel_source(_l0_producer(64, 128, 32, 64, 32, "float16", body))
+    source = _kernel_source(main)
     args = _cc_to_ub_argument_lists(source)
     assert len(args) == 2, source
     assert set(_src_strides(source)) == {"32"}, source
