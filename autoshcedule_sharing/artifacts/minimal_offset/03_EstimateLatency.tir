@@ -1,0 +1,32 @@
+# from tvm.script import ir as I
+# from tvm.script import tirx as T
+
+@I.ir_module
+class Module:
+    @T.prim_func
+    def main(A_handle: T.handle):
+        T.func_attr({"target": T.target({"host": {"keys": ["cpu"], "kind": "c", "tag": ""}, "keys": ["ascend"], "kind": "ascend", "launch_grid_only": True, "max_vector_bits": 64, "supports_kernel_status_return": False, "supports_vector_predicate": True, "tag": ""})})
+        A = T.match_buffer(A_handle, (256, 64), "bfloat16", strides=(64, 1))
+        with T.sblock("root"):
+            T.reads()
+            T.writes()
+            l1 = T.Buffer((64, 64), "bfloat16", scope="shared.l1")
+            l0 = T.Buffer((64, 64), "bfloat16", scope="shared.l0a")
+            T.sblock_attr({"layout_map": {l1: metadata["tl.AscendFractalLayout"][0], l0: metadata["tl.AscendFractalLayout"][1]}})
+            bx = T.launch_thread("blockIdx.x", 1)
+            with T.sblock("tilelang_root"):
+                T.reads()
+                T.writes()
+                T.sblock_attr({"layout_map": {l1: metadata["tl.AscendFractalLayout"][0], l0: metadata["tl.AscendFractalLayout"][1]}, "tl.buffer_version_mode": {l1.data: "iteration"}, "tl.buffer_versions_map": {l1.data: 3}})
+                l1 = T.sblock_alloc_buffer((64, 64), "bfloat16", data=l1.data, scope="shared.l1")
+                l0 = T.sblock_alloc_buffer((64, 64), "bfloat16", data=l0.data, scope="shared.l0a")
+                T.attr({"stage": -1}, "tl.schedule_unit", 1)
+                for i in T.serial(4, annotations={"enable_offset": True, "multi_buffer_eligible": [l1.data, l0.data], "num_stages": 3}):
+                    with T.attr({"stage": -1}, "tl.schedule_unit", 1):
+                        T.attr({"ii": T.int64(82), "latency": T.int64(272)}, "tl.ascend_task", 1)
+                        T.ascend_copy(T.region(A[i * 64, 0], 1, 64, 64), T.region(l1[0, 0], 2, 64, 64))
+                    T.attr({"stage": -1}, "tl.schedule_unit", 1)
+                    T.attr({"ii": T.int64(35), "latency": T.int64(37)}, "tl.ascend_task", 1)
+                    T.ascend_copy(T.region(l1[0, 0], 1, 64, 64), T.region(l0[0, 0], 2, 64, 64))
+
+# Metadata omitted. Use show_meta=True in script() method to show it.

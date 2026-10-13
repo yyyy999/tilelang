@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AutoSchedule 分享</title><style>
+:root{--paper:#faf9f6;--ink:#172b36;--muted:#52646c;--accent:#136b69;--line:#cdd6d5;--scale:1}
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#dce2e2;color:var(--ink);font-family:"Microsoft YaHei UI","Microsoft YaHei","Noto Sans CJK SC",sans-serif}
+.slide{display:none;position:absolute;left:50%;top:50%;width:1280px;height:720px;transform:translate(-50%,-50%) scale(var(--scale));transform-origin:center;background:var(--paper);padding:44px 66px 34px;flex-direction:column;gap:16px;overflow:hidden}
+.slide.active{display:flex}
+h1{font-size:42px;line-height:1.22;margin:0;font-weight:700;letter-spacing:.01em}
+.slide.cover h1{font-size:66px;margin-top:14px}
+.lead{font-size:27px;line-height:1.5;color:var(--accent);margin:0;max-width:1130px;font-weight:500}
+.body{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:center;gap:20px}
+.body>p,.columns p{font-size:26px;line-height:1.55;margin:0}
+.columns{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:42px;align-items:center}
+.columns>div{min-width:0;display:flex;flex-direction:column;gap:18px}
+pre{margin:0;padding:12px 0;white-space:pre-wrap;overflow-wrap:anywhere;font:23px/1.48 Consolas,"Cascadia Mono","Microsoft YaHei",monospace}
+.label{font-size:17px;line-height:1.5;color:var(--muted);margin-bottom:2px}
+ul{margin:0;padding-left:1.15em;display:flex;flex-direction:column;gap:14px}
+li{font-size:26px;line-height:1.5;padding-left:6px}
+li::marker{color:var(--accent)}
+.flow{display:flex;gap:14px;align-items:center;justify-content:space-between;margin:6px 0}
+.flow-node{flex:1;text-align:center;font-size:27px;line-height:1.5;padding:14px 3px;border-top:3px solid var(--accent)}
+.arrow{font-size:30px;color:var(--muted)}
+.windows{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0;border-bottom:2px solid var(--line)}
+.windows>div{padding:12px 20px;min-height:108px;border-left:1px solid var(--line)}
+.windows>div:first-child{border-left:none}
+.windows small{font-size:17px;color:var(--muted)}
+.windows strong{display:block;margin-top:10px;font-size:24px;line-height:1.5;font-weight:500}
+.windows .emphasis{color:var(--accent);border-bottom:3px solid var(--accent)}
+.timeline{border-collapse:collapse;font-size:23px;line-height:1.35;width:100%}
+.timeline th{text-align:left;font-size:18px;color:var(--muted);font-weight:500;padding:8px 12px;border-bottom:2px solid var(--line)}
+.timeline td{padding:9px 12px;border-bottom:1px solid var(--line)}
+.timeline .overlap{color:var(--accent);font-weight:700}
+footer{border-top:1px solid var(--line);padding-top:10px;display:flex;gap:18px;align-items:flex-end;justify-content:space-between;min-height:48px}
+.foot{font-size:16px;line-height:1.5;color:var(--muted);max-width:1020px}
+.sources{font-size:14px;line-height:1.5}
+.sources a{color:var(--muted);text-decoration:none}
+.sources a:hover{text-decoration:underline}
+.page-number{font-size:18px;color:var(--accent);white-space:nowrap;padding-bottom:2px}
+#controls{position:fixed;bottom:9px;right:14px;display:flex;align-items:center;gap:5px;opacity:.15;transition:opacity .15s;background:var(--paper);padding:3px 5px;border:1px solid var(--line);font-size:12px}
+#controls:hover,#controls:focus-within{opacity:1}
+button,select{font:inherit;color:var(--ink);background:transparent;border:0;padding:5px;cursor:pointer}
+select{max-width:220px}
+#help{position:fixed;inset:0;display:none;place-items:center;background:rgba(23,43,54,.72)}
+#help.open{display:grid}
+#help>div{background:var(--paper);padding:36px 48px;font-size:22px;line-height:1.8}
+#help h2{margin:0 0 10px}
+#s12 .columns{grid-template-columns:minmax(0,1.25fr) minmax(0,.9fr);gap:30px}
+#s12 pre{font-size:21px;line-height:1.5}
+#s13 pre{font-size:23px}
+#s15 .body{gap:40px}
+#s16 pre{font-size:25px}
+@media print{
+ @page{size:1280px 720px;margin:0}
+ html,body{height:auto;overflow:visible;background:white}
+ .slide,.slide.active{display:flex;position:relative;left:0;top:0;transform:none;break-after:page;page-break-after:always}
+ #controls,#help{display:none!important}
+}
+</style></head><body>
+<section id="s01" class="slide active cover" aria-label="AutoSchedule" data-index="0"><h1>AutoSchedule</h1><p class="lead">任务建模与流水 IR</p><div class="body"><p>程序中的操作，怎样成为调度器处理的任务？</p><p>任务的安排，怎样成为可执行的流水循环？</p><div class="flow"><div class="flow-node">程序</div><span class="arrow" aria-hidden="true">→</span><div class="flow-node">调度模型</div><span class="arrow" aria-hidden="true">→</span><div class="flow-node">流水 IR</div></div></div><footer><div class="foot">IR：WSL 构建 789afc963205 · 源码核对：fbd7cf81c700</div><div class="page-number">01 / 15</div></footer></section>
+<section id="s02" class="slide" aria-label="贯穿全程的两次搬运" data-index="1"><h1>贯穿全程的两次搬运</h1><p class="lead">四块输入数据，每块依次经过 GM → L1 → L0A</p><div class="body"><div class="code-group"><div class="label">本次分享变体 · 源程序参数展开节选</div><pre><code>T.annotate_buffer_versions({l1: (3, &quot;iteration&quot;)})
+for i in T.Pipelined(
+    4, num_stages=3,
+    annotations={&quot;multi_buffer_eligible&quot;: [l1], &quot;enable_offset&quot;: True},
+):
+    T.copy(A[i * 64 : (i + 1) * 64, :], l1)
+    T.copy(l1, l0)</code></pre></div><p>同一块数据必须先加载再消费。不同块之间，怎样安全地重叠？</p></div><footer><div class="foot">L1 固定三个版本；本例用于观察编译过程，没有数值输出。<div class="sources"><a href="../autoshcedule_sharing/minimal.py" target="_blank" rel="noopener">minimal.py · make_program</a></div></div><div class="page-number">02 / 15</div></footer></section>
+<section id="s03" class="slide" aria-label="整体编译流程" data-index="2"><h1>整体编译流程</h1><p class="lead">AutoSchedule 写回调度安排，后续 pass 将安排落实为流水 IR</p><div class="body"><div class="flow"><div class="flow-node">准备调度输入</div><span class="arrow" aria-hidden="true">→</span><div class="flow-node">AutoSchedule</div><span class="arrow" aria-hidden="true">→</span><div class="flow-node">流水落地</div></div><div class="columns"><div><p>识别任务与控制结构</p><p>分析读写、资源，估计代价</p></div><div><p>分配执行核，插入同步</p><p>物化缓冲版本，展开流水循环</p></div></div><div class="code-group"><div class="label">AutoSchedule pass 内部</div><pre><code>DecodeScheduledTIR
+        ↓
+ScheduleSingleKernel
+        ↓
+EncodeScheduledTIR</code></pre></div></div><footer><div class="foot">布局与合法化等前置步骤，以及后续 codegen，在图中省略。<div class="sources"><a href="../tilelang/ascend/pipeline.py" target="_blank" rel="noopener">pipeline.py · 调度前后顺序</a> · <a href="../src/ascend/transform/auto_schedule.cc" target="_blank" rel="noopener">auto_schedule.cc · AutoSchedule</a></div></div><div class="page-number">03 / 15</div></footer></section>
+<section id="s04" class="slide" aria-label="IR 中的任务边界" data-index="3"><h1>IR 中的任务边界</h1><p class="lead">一层标记调度单元，一层标记语义任务</p><div class="body"><div class="code-group"><div class="label">真实 IR 节选 · 仅将 copy 参数换行</div><pre><code>with T.attr({&quot;stage&quot;: -1}, &quot;tl.schedule_unit&quot;, 1):
+    T.attr({}, &quot;tl.ascend_task&quot;, 1)
+    T.ascend_copy(T.region(A[i * 64, 0], 1, 64, 64),
+                  T.region(l1[0, 0], 2, 64, 64))</code></pre></div><ul><li>schedule_unit 保存 stage；stage=-1 表示尚未指定。</li><li>ascend_task 包裹这次搬运；本例未显式写 T.Task。</li></ul></div><footer><div class="foot">MaterializeScheduleUnits 后；外层循环也有自己的 schedule_unit。<div class="sources"><a href="../autoshcedule_sharing/artifacts/minimal_offset/01_MaterializeScheduleUnits.tir" target="_blank" rel="noopener">01_MaterializeScheduleUnits.tir</a></div></div><div class="page-number">04 / 15</div></footer></section>
+<section id="s05" class="slide" aria-label="任务与控制模型" data-index="4"><h1>任务与控制模型</h1><p class="lead">循环成为 ControlNode，语义任务成为 TaskNode</p><div class="body"><div class="columns"><div><div class="code-group"><div class="label">模型结构示意</div><pre><code>ControlNode / for i：四次迭代
+├── TaskNode / Load
+│   GM → L1
+└── TaskNode / Move
+    L1 → L0A</code></pre></div></div><div><div class="code-group"><div class="label">ScheduledTIRDecoder · 源码节选</div><pre><code>const auto *loop_node =
+    body.as&lt;ForNode&gt;();
+if (loop_node == nullptr)
+  return DecodeTask(marker, body,
+                    std::move(guards));</code></pre></div><p>latency：结果就绪延迟；task II：发射间隔。</p></div></div><p>本次模型代价：Load 为 latency 272 / task II 82；Move 为 37 / 35。</p></div><footer><div class="foot">模型树是源码对应示意；代价值来自 EstimateLatency 后 IR，属于估计。<div class="sources"><a href="../src/ascend/transform/auto_schedule/scheduled_tir.cc" target="_blank" rel="noopener">scheduled_tir.cc · DecodeNode</a> · <a href="../autoshcedule_sharing/artifacts/minimal_offset/03_EstimateLatency.tir" target="_blank" rel="noopener">03_EstimateLatency.tir</a></div></div><div class="page-number">05 / 15</div></footer></section>
+<section id="s06" class="slide" aria-label="数据依赖与槽位复用" data-index="5"><h1>数据依赖与槽位复用</h1><p class="lead">既要等数据准备好，也要等旧数据使用完</p><div class="body"><div class="flow"><div class="flow-node">Load(i) 写入</div><span class="arrow" aria-hidden="true">→</span><div class="flow-node">Move(i) 消费</div><span class="arrow" aria-hidden="true">→</span><div class="flow-node">Load(i+3) 复用</div></div><div class="code-group"><div class="label">三个版本下的槽位对应示意</div><pre><code>逻辑迭代：   0       1       2       3
+L1 槽位：    0       1       2       0</code></pre></div><ul><li>Load(i) → Move(i)：同一块数据的生产与消费。</li><li>Move(i) → Load(i+3)：同一槽位的覆盖保护。</li></ul></div><footer><div class="foot">这是依赖含义的示意，省略其他依赖；Load 使用 MTE2，Move 使用 MTE1。<div class="sources"><a href="../src/ascend/transform/auto_schedule/dependency_analysis.cc" target="_blank" rel="noopener">dependency_analysis.cc · AnalyzeDependencies</a></div></div><div class="page-number">06 / 15</div></footer></section>
+<section id="s07" class="slide" aria-label="调度按层推进" data-index="6"><h1>调度按层推进</h1><p class="lead">先安排子循环，再把子循环的汇总信息交给父层</p><div class="body"><div class="columns"><div><div class="code-group"><div class="label">嵌套结构示意</div><pre><code>父控制结构
+├── 子循环
+│   ├── 任务 A
+│   └── 任务 B
+└── 后续任务</code></pre></div></div><div><div class="code-group"><div class="label">ScheduleRecursive · 源码节选</div><pre><code>for (auto &amp;child : origin_children) {
+  ScheduleRecursive(child);
+}
+Z3SchedulePythonLoop(ctrl,
+                     manual_schedule);</code></pre></div></div></div><p>依赖保证语义；pipe、HBM 等资源限制重叠；代价影响安排。</p></div><footer><div class="foot">任务 II、内层循环 II、父层看到的子循环整体代价，需要分别理解。<div class="sources"><a href="../src/ascend/transform/auto_schedule.cc" target="_blank" rel="noopener">auto_schedule.cc · ScheduleRecursive</a></div></div><div class="page-number">07 / 15</div></footer></section>
+<section id="s08" class="slide" aria-label="stage 表示相隔的重复窗口" data-index="7"><h1>stage 表示相隔的重复窗口</h1><p class="lead">循环 II 是迭代启动间隔；start time 决定任务落在哪个窗口</p><div class="body"><div class="windows"><div><small>窗口 0 · [0,100)</small><strong>A(0) · 20</strong></div><div><small>窗口 1</small><strong>A(1) · 120</strong></div><div><small>窗口 2</small><strong>A(2) · 220</strong></div><div class="emphasis"><small>窗口 3 · [300,400)</small><strong>A(3) · 320<br>B(0) · 340</strong></div></div><div class="columns"><div><div class="code-group"><div class="label">示意：II=100</div><pre><code>A：20  = 0 × 100 + 20
+B：340 = 3 × 100 + 40</code></pre></div></div><div><p>A 为 stage 0，B 为 stage 3。</p><p>窗口 3 中：A(3) 与 B(0) 并存。</p></div></div><p>因此，流水轮次 t 对应 A(t) 与 B(t−3)。</p></div><footer><div class="foot">数值仅用于换算示意，非本次求解结果；stage 不包含全部窗口内时间信息。<div class="sources"><a href="../src/ascend/transform/auto_schedule.cc" target="_blank" rel="noopener">auto_schedule.cc · stage 恢复</a></div></div><div class="page-number">08 / 15</div></footer></section>
+<section id="s09" class="slide" aria-label="调度结果写回 IR" data-index="8"><h1>调度结果写回 IR</h1><p class="lead">本次结果：Load 为 stage 0，Move 为 stage 3</p><div class="body"><div class="columns"><div><div class="code-group"><div class="label">真实 stage 字段 · 换行并省略任务体</div><pre><code>with T.attr({&quot;stage&quot;: 3},
+            &quot;tl.schedule_unit&quot;, 1):
+    # Move 的任务体省略
+T.attr({&quot;stage&quot;: 0},
+       &quot;tl.schedule_unit&quot;, 1)
+# Load 的任务体省略</code></pre></div></div><div><div class="code-group"><div class="label">Encoder · 控制节点写回源码</div><pre><code>For loop = control-&gt;control;
+loop.CopyOnWrite()-&gt;body =
+    EncodeList(control-&gt;children);
+return EncodeControl(control,
+                     std::move(loop));</code></pre></div><p>原语句被保留；循环体按调度结果重建。</p></div></div><p>文本中 Move 排在前面；后续执行的是 Move(t−3) 与 Load(t)。</p></div><footer><div class="foot">此时循环仍为四次，版本维度、同步和迭代偏移尚未全部落实。<div class="sources"><a href="../autoshcedule_sharing/artifacts/minimal_offset/04_AutoSchedule.tir" target="_blank" rel="noopener">04_AutoSchedule.tir</a> · <a href="../src/ascend/transform/auto_schedule/scheduled_tir.cc" target="_blank" rel="noopener">scheduled_tir.cc · EncodeNode</a></div></div><div class="page-number">09 / 15</div></footer></section>
+<section id="s10" class="slide" aria-label="同步落实完成关系" data-index="9"><h1>同步落实完成关系</h1><p class="lead">两种交接分别保护消费与覆盖</p><div class="body"><div class="columns"><div><div class="flow"><div class="flow-node">Load 完成写入</div><span class="arrow" aria-hidden="true">→</span><div class="flow-node">Move 可以读取</div></div><div class="code-group"><div class="label">数据就绪 · 非连续真实调用节选</div><pre><code>T.ascend_set_flag(&quot;MTE2_MTE1&quot;, i % 3)
+T.ascend_wait_flag(&quot;MTE2_MTE1&quot;, i % 3)</code></pre></div></div><div><div class="flow"><div class="flow-node">Move 使用完槽位</div><span class="arrow" aria-hidden="true">→</span><div class="flow-node">后续 Load 可以覆盖</div></div><div class="code-group"><div class="label">槽位释放 · 非连续真实调用节选</div><pre><code>T.ascend_set_flag(&quot;MTE1_MTE2&quot;, i % 3)
+T.ascend_wait_flag(&quot;MTE1_MTE2&quot;, i % 3)</code></pre></div></div></div></div><footer><div class="foot">InsertSync 后；节选省略 stage 包裹、入口初始化、末尾等待及其他同步。<div class="sources"><a href="../autoshcedule_sharing/artifacts/minimal_offset/08_InsertSync.tir" target="_blank" rel="noopener">08_InsertSync.tir</a></div></div><div class="page-number">10 / 15</div></footer></section>
+<section id="s11" class="slide" aria-label="缓冲版本落实到分配与访问" data-index="10"><h1>缓冲版本落实到分配与访问</h1><p class="lead">本次 L1 分配变成三个版本，访问增加槽位索引</p><div class="body"><div class="code-group"><div class="label">真实分配节选 · 仅换行</div><pre><code>l1_1 = T.sblock_alloc_buffer(
+    (3, 64, 64), &quot;bfloat16&quot;, data=l1.data,
+    strides=(4096, 64, 1), scope=&quot;shared.l1&quot;)</code></pre></div><div class="flow"><div class="flow-node">slot 0</div><span class="arrow" aria-hidden="true">→</span><div class="flow-node">slot 1</div><span class="arrow" aria-hidden="true">→</span><div class="flow-node">slot 2</div></div><p>本例使用 iteration 模式：逻辑迭代 i 选择 i % 3。</p><p>stage 3 的消费稍后展开为逻辑迭代 i−3，槽位随之成为 (i−3)%3。</p></div><footer><div class="foot">MaterializeMultiBuffer 后；三个版本是本例固定输入，不是求解器自由选出的结果。<div class="sources"><a href="../autoshcedule_sharing/artifacts/minimal_offset/09_MaterializeMultiBuffer.tir" target="_blank" rel="noopener">09_MaterializeMultiBuffer.tir</a></div></div><div class="page-number">11 / 15</div></footer></section>
+<section id="s12" class="slide" aria-label="流水循环中的逻辑迭代" data-index="11"><h1>流水循环中的逻辑迭代</h1><p class="lead">四次逻辑迭代展开为七次流水循环，仍只处理四块数据</p><div class="body"><div class="columns"><div><div class="code-group"><div class="label">真实 IR · 消费端节选，仅换行，省略同步</div><pre><code>for i in T.serial(
+    7, annotations={&quot;enable_offset&quot;: True}
+):
+    if i - 3 &gt;= 0:
+        T.ascend_copy(
+            T.region(l1_1[(i - 3) % 3, 0, 0],
+                     1, 1, 64, 64),
+            T.region(l0[0, 0],
+                     2, 64, 64))</code></pre></div><p>Load 在 i<4 时执行，写入槽位 i%3。</p></div><div><div class="label">由真实 guard 推导的逻辑操作</div><table class="timeline"><thead><tr><th>流水轮次</th><th>逻辑操作</th></tr></thead><tbody><tr><td>0</td><td>Load(0)</td></tr><tr><td>1</td><td>Load(1)</td></tr><tr><td>2</td><td>Load(2)</td></tr><tr class="overlap"><td>3</td><td>Move(0) → Load(3)</td></tr><tr><td>4</td><td>Move(1)</td></tr><tr><td>5</td><td>Move(2)</td></tr><tr><td>6</td><td>Move(3)</td></tr></tbody></table></div></div></div><footer><div class="foot">右侧由真实 guard 推导，省略同步；表示逻辑执行顺序，不是设备时间线。<div class="sources"><a href="../autoshcedule_sharing/artifacts/minimal_offset/10_LowerScheduledTIR.tir" target="_blank" rel="noopener">10_LowerScheduledTIR.tir</a></div></div><div class="page-number">12 / 15</div></footer></section>
+<section id="s13" class="slide" aria-label="FA 中的嵌套控制与跨核交接" data-index="12"><h1>FA 中的嵌套控制与跨核交接</h1><p class="lead">相同模型扩展到更多任务、跨迭代状态和 Cube / Vector 协作</p><div class="body"><div class="flow"><div class="flow-node">QK</div><span class="arrow" aria-hidden="true">→</span><div class="flow-node">softmax</div><span class="arrow" aria-hidden="true">→</span><div class="flow-node">pack P</div><span class="arrow" aria-hidden="true">→</span><div class="flow-node">PV</div><span class="arrow" aria-hidden="true">→</span><div class="flow-node">累积 O</div></div><p>外层两个 query tile，内层四个 KV block；m、l、O 跨迭代更新。</p><div class="code-group"><div class="label">真实跨核调用 · 分处 CUBE / VECTOR，省略 guard 和其他协议</div><pre><code>T.ascend_cross_core_set_flag(4, &quot;PIPE_FIX&quot;,
+    (kv - 1 + local_mt * 4) % 3 + 6)
+
+T.ascend_cross_core_wait_flag(4, &quot;PIPE_V&quot;,
+    (kv + local_mt * 4) % 3 + 6)</code></pre></div></div><footer><div class="foot">流程为宏调用骨架示意，宏不等于任务；事件索引按各自逻辑迭代对应。<div class="sources"><a href="../autoshcedule_sharing/fa_core.py" target="_blank" rel="noopener">fa_core.py · kv_auto</a> · <a href="../autoshcedule_sharing/artifacts/fa/10_LowerScheduledTIR.tir" target="_blank" rel="noopener">FA LowerScheduledTIR · 生产者</a> · <a href="../autoshcedule_sharing/artifacts/fa/10_LowerScheduledTIR.tir" target="_blank" rel="noopener">消费者</a></div></div><div class="page-number">13 / 15</div></footer></section>
+<section id="s14" class="slide" aria-label="程序与流水 IR 的对应" data-index="13"><h1>程序与流水 IR 的对应</h1><p class="lead">从两次搬运出发，每一步都保留程序语义</p><div class="body"><div class="flow"><div class="flow-node">操作与循环</div><span class="arrow" aria-hidden="true">→</span><div class="flow-node">任务 / 控制树</div><span class="arrow" aria-hidden="true">→</span><div class="flow-node">顺序与 stage</div><span class="arrow" aria-hidden="true">→</span><div class="flow-node">同步与槽位</div><span class="arrow" aria-hidden="true">→</span><div class="flow-node">流水循环</div></div><ul><li>Decode / Encode：在标记化 TIR 与内部模型之间转换。</li><li>调度：在依赖和资源限制下形成任务安排。</li><li>落地：生成完成交接、版本访问和迭代边界。</li></ul><p>stage、缓冲版本数、任务 II、循环 II 各有不同含义。</p></div><footer><div class="foot">本次完成编译与 IR 采集；模型代价不等于设备实测时间。</div><div class="page-number">14 / 15</div></footer></section>
+<section id="s15" class="slide" aria-label="接下来：求解器细节" data-index="14"><h1>接下来：求解器细节</h1><p class="lead">任务模型与流水生成之间的求解环节</p><div class="body"><ul><li>C++ 怎样组织求解器输入，怎样读取输出？</li><li>依赖、资源和缓冲要求怎样写成约束？</li><li>怎样得到任务时间、版本数和循环 II？</li></ul><p>接下来由同事展开输入输出协议、数学约束与求解过程。</p></div><footer><div class="foot">本部分已完成程序 → 调度模型 → 流水 IR 的链路。</div><div class="page-number">15 / 15</div></footer></section>
+<section id="s16" class="slide appendix" aria-label="任务边界与 guard" data-index="15"><h1>任务边界与 guard</h1><p class="lead">作用域表示方法与节点类型是两个问题</p><div class="body"><div class="columns"><div><div class="code-group"><div class="label">叶任务结构示意</div><pre><code>schedule_unit
+└── if enabled          ← guard
+    └── ascend_task
+        └── copy</code></pre></div></div><div><div class="code-group"><div class="label">控制结构示意</div><pre><code>schedule_unit
+└── if enabled          ← guard
+    └── For
+        └── 子调度单元</code></pre></div></div></div><ul><li>Decoder 先记录外层 guard，再识别任务标记或直接的循环。</li><li>独立 T.attr 是作用域简写，范围延续到当前语句块末尾。</li><li>任务分组内部包含循环，仍可能是一个 TaskNode。</li></ul></div><footer><div class="foot">附录 · with 的有无不决定节点类型；guard 在写回时恢复。<div class="sources"><a href="../src/ascend/transform/auto_schedule/scheduled_tir.cc" target="_blank" rel="noopener">scheduled_tir.cc · DecodeGuardedNode</a></div></div><div class="page-number">附录 1 / 2</div></footer></section>
+<section id="s17" class="slide appendix" aria-label="用例与证据来源" data-index="16"><h1>用例与证据来源</h1><p class="lead">真实产物、源码对应与示意说明分开使用</p><div class="body"><ul><li>最小主线：offset=True、iteration 索引、固定三个 L1 版本。</li><li>保留原例 counter 基线；counter 只开启 offset 的拒绝记录另存。</li><li>FA：256 / 512 / 128，自动调度，多个版本数由用户显式固定。</li></ul><p>真实 IR 使用 WSL 现有构建 checkout 789afc963205；Windows 源码核对版本为 fbd7cf81c700。</p><p>未进行设备编译、NPU 数值验证或性能测试。</p></div><footer><div class="foot">附录 · 完整产物、运行配置和日志见 artifacts 下的 manifest.json。<div class="sources"><a href="../autoshcedule_sharing/IR-reading-guide.md" target="_blank" rel="noopener">IR 阅读索引</a> · <a href="../autoshcedule_sharing/artifacts/minimal_offset/manifest.json" target="_blank" rel="noopener">最小用例 manifest</a> · <a href="../autoshcedule_sharing/artifacts/fa/manifest.json" target="_blank" rel="noopener">FA manifest</a></div></div><div class="page-number">附录 2 / 2</div></footer></section>
+<nav id="controls" aria-label="翻页"><button id="previous" aria-label="上一页">←</button><select id="jump" aria-label="跳转页面"></select><button id="next" aria-label="下一页">→</button><button id="fullscreen" aria-label="全屏">全屏 F</button><button id="helpButton" aria-label="键盘帮助">?</button></nav><div id="help"><div><h2>演示控制</h2>← / → / 空格：翻页<br>F：全屏<br>Home：封面 · End：交接页<br>B：附录 · ?：帮助<br>也可使用右下角页码菜单。<br>点击此处关闭</div></div><script>
+const slides=[...document.querySelectorAll(".slide")];
+const picker=document.getElementById("jump");
+let current=0;
+slides.forEach((s,i)=>{const o=document.createElement("option");o.value=i;o.textContent=(i<15?(i+1):"附录"+(i-14))+" · "+s.querySelector("h1").textContent;picker.append(o)});
+function show(index){
+ current=Math.max(0,Math.min(slides.length-1,index));
+ slides.forEach((s,i)=>{s.classList.toggle("active",i===current);s.setAttribute("aria-hidden",i!==current)});
+ picker.value=String(current);
+ history.replaceState(null,"","#"+(current+1));
+ document.title="AutoSchedule · "+slides[current].querySelector("h1").textContent;
+}
+function fit(){document.documentElement.style.setProperty("--scale",String(Math.min(innerWidth/1280,innerHeight/720)))}
+async function full(){try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen()}catch(e){document.getElementById("help").classList.add("open")}}
+picker.onchange=()=>show(Number(picker.value));
+document.getElementById("previous").onclick=()=>show(current-1);
+document.getElementById("next").onclick=()=>show(current+1);
+document.getElementById("fullscreen").onclick=full;
+document.getElementById("helpButton").onclick=()=>document.getElementById("help").classList.toggle("open");
+document.getElementById("help").onclick=()=>document.getElementById("help").classList.remove("open");
+document.addEventListener("keydown",e=>{
+ if(["INPUT","SELECT","TEXTAREA","BUTTON"].includes(e.target.tagName))return;
+ if(["ArrowRight","PageDown"," "].includes(e.key)){e.preventDefault();show(current+1)}
+ else if(["ArrowLeft","PageUp"].includes(e.key)){e.preventDefault();show(current-1)}
+ else if(e.key==="Home"){e.preventDefault();show(0)}
+ else if(e.key==="End"){e.preventDefault();show(14)}
+ else if(e.key.toLowerCase()==="b"){e.preventDefault();show(15)}
+ else if(e.key.toLowerCase()==="f"){e.preventDefault();full()}
+ else if(e.key==="?"){document.getElementById("help").classList.toggle("open")}
+ else if(e.key==="Escape"){document.getElementById("help").classList.remove("open")}
+});
+window.addEventListener("resize",fit);
+window.addEventListener("hashchange",()=>{const n=Number(location.hash.slice(1));if(Number.isInteger(n)&&n>0)show(n-1)});
+fit();show((Number(location.hash.slice(1))||1)-1);
+window.deck={show,slides};
+</script></body></html>
+

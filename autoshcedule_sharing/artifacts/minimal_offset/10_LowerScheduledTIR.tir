@@ -1,0 +1,50 @@
+# from tvm.script import ir as I
+# from tvm.script import tirx as T
+
+@I.ir_module
+class Module:
+    @T.prim_func
+    def main(A_handle: T.handle):
+        T.func_attr({"target": T.target({"host": {"keys": ["cpu"], "kind": "c", "tag": ""}, "keys": ["ascend"], "kind": "ascend", "launch_grid_only": True, "max_vector_bits": 64, "supports_kernel_status_return": False, "supports_vector_predicate": True, "tag": ""})})
+        A = T.match_buffer(A_handle, (256, 64), "bfloat16", strides=(64, 1))
+        with T.sblock("root"):
+            T.reads()
+            T.writes()
+            l1 = T.Buffer((64, 64), "bfloat16", scope="shared.l1")
+            l0 = T.Buffer((64, 64), "bfloat16", scope="shared.l0a")
+            T.sblock_attr({"layout_map": {l1: metadata["tl.AscendFractalLayout"][0], l0: metadata["tl.AscendFractalLayout"][1]}})
+            bx = T.launch_thread("blockIdx.x", 1)
+            with T.sblock("tilelang_root"):
+                T.reads()
+                T.writes()
+                l1_1 = T.Buffer((3, 64, 64), "bfloat16", data=l1.data, strides=(4096, 64, 1), scope="shared.l1")
+                T.sblock_attr({"layout_map": {l1: metadata["tl.AscendFractalLayout"][0], l0: metadata["tl.AscendFractalLayout"][1], l1_1: metadata["tl.AscendFractalLayout"][2]}, "tl.manual_multi_buffer": {l1.data: 3}})
+                l1_1 = T.sblock_alloc_buffer((3, 64, 64), "bfloat16", data=l1.data, strides=(4096, 64, 1), scope="shared.l1")
+                l0 = T.sblock_alloc_buffer((64, 64), "bfloat16", data=l0.data, scope="shared.l0a")
+                T.attr({l1.data: [], l0.data: []}, "tl.buffer_alias_map", 1)
+                with T.sblock("CUBE", no_realize=True):
+                    T.reads()
+                    T.writes()
+                    T.ascend_set_flag("MTE1_MTE2", 0)
+                    T.ascend_set_flag("MTE1_MTE2", 1)
+                    T.ascend_set_flag("MTE1_MTE2", 2)
+                    for i in T.serial(7, annotations={"enable_offset": True}):
+                        if i - 3 >= 0:
+                            T.ascend_pipe_barrier("PIPE_MTE1")
+                        if i - 3 >= 0:
+                            T.ascend_wait_flag("MTE2_MTE1", (i - 3) % 3)
+                        if i - 3 >= 0:
+                            T.ascend_copy(T.region(l1_1[(i - 3) % 3, 0, 0], 1, 1, 64, 64), T.region(l0[0, 0], 2, 64, 64))
+                        if i - 3 >= 0:
+                            T.ascend_set_flag("MTE1_MTE2", (i - 3) % 3)
+                        if i < 4:
+                            T.ascend_wait_flag("MTE1_MTE2", i % 3)
+                        if i < 4:
+                            T.ascend_copy(T.region(A[i * 64, 0], 1, 64, 64), T.region(l1_1[i % 3, 0, 0], 2, 1, 64, 64))
+                        if i < 4:
+                            T.ascend_set_flag("MTE2_MTE1", i % 3)
+                    T.ascend_wait_flag("MTE1_MTE2", 0)
+                    T.ascend_wait_flag("MTE1_MTE2", 1)
+                    T.ascend_wait_flag("MTE1_MTE2", 2)
+
+# Metadata omitted. Use show_meta=True in script() method to show it.

@@ -1,0 +1,120 @@
+{
+  "case": "minimal_offset",
+  "started_at_utc": "2026-10-13T03:49:12.101715+00:00",
+  "status": "failed",
+  "python": "/root/tilelang-venv/bin/python",
+  "working_directory": "/root/tilelang",
+  "tilelang_python": "/root/tilelang/tilelang/__init__.py",
+  "tvm_python": "/root/tilelang/3rdparty/tvm/python/tvm/__init__.py",
+  "compiler_checkout": "/root/tilelang",
+  "compiler_revision": "789afc9632059c7404ffd10e188c6a073be40e15",
+  "sharing_checkout": "/mnt/d/codes/yyz/tilelang",
+  "sharing_revision": "fbd7cf81c700dc3f5b2d54fa9ef1b5d7cc8c7907",
+  "z3_version": "4.15.4",
+  "enable_device_compile": false,
+  "input_sha256": {
+    "minimal.py": "68ca4625947e4a2217dece8b0336492bbaab53a50a14059d530ebe7bd5f0b65c",
+    "fa.py": "5ee42afa9cc7ce2a49b3c5499dd20cfb1e6834945a99cdfa8de1eb12da341353",
+    "fa_core.py": "0c1af6f07f2c727ca6ef6d09d4ce3c21ce16286d5931e75e8a9c6f2248ed23b0"
+  },
+  "parameters": {
+    "iterations": 4,
+    "tile": 64,
+    "fixed_l1_versions": 3,
+    "enable_offset": true
+  },
+  "snapshots": [
+    {
+      "pass": "tl.MaterializeScheduleUnits",
+      "file": "01_MaterializeScheduleUnits.tir",
+      "lines": 32,
+      "schedule_unit_stages": [
+        -1,
+        -1,
+        -1
+      ],
+      "task_metadata": [
+        {},
+        {}
+      ]
+    },
+    {
+      "pass": "tl.AnnotateMultiBufferEligible",
+      "file": "02_AnnotateMultiBufferEligible.tir",
+      "lines": 32,
+      "schedule_unit_stages": [
+        -1,
+        -1,
+        -1
+      ],
+      "task_metadata": [
+        {},
+        {}
+      ]
+    },
+    {
+      "pass": "tl.EstimateLatency",
+      "file": "03_EstimateLatency.tir",
+      "lines": 32,
+      "schedule_unit_stages": [
+        -1,
+        -1,
+        -1
+      ],
+      "task_metadata": [
+        {
+          "latency": "T.int64(272)",
+          "ii": "T.int64(82)"
+        },
+        {
+          "latency": "T.int64(37)",
+          "ii": "T.int64(35)"
+        }
+      ]
+    },
+    {
+      "pass": "tl.AutoSchedule",
+      "file": "04_AutoSchedule.tir",
+      "lines": 32,
+      "schedule_unit_stages": [
+        3,
+        0,
+        0
+      ],
+      "task_metadata": [
+        {
+          "latency": "T.int64(37)",
+          "ii": "T.int64(35)"
+        },
+        {
+          "latency": "T.int64(272)",
+          "ii": "T.int64(82)"
+        }
+      ]
+    },
+    {
+      "pass": "tl.AssignCore",
+      "file": "05_AssignCore.tir",
+      "lines": 32,
+      "schedule_unit_stages": [
+        3,
+        0,
+        0
+      ],
+      "task_metadata": [
+        {
+          "latency": "T.int64(37)",
+          "ii": "T.int64(35)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(272)",
+          "ii": "T.int64(82)",
+          "core_mask": "T.int64(2)"
+        }
+      ]
+    }
+  ],
+  "error": "Traceback (most recent call last):\n  File \"/mnt/d/codes/yyz/tilelang/autoshcedule_sharing/dump_ir.py\", line 125, in main\n    artifact = tilelang.lower(program, target=\"ascend\", enable_device_compile=False)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tilelang/tilelang/engine/lower.py\", line 238, in lower\n    return lower_with_context(\n           ^^^^^^^^^^^^^^^^^^^\n  File \"/root/tilelang/tilelang/engine/lower.py\", line 165, in lower_with_context\n    return _lower_with_context_impl(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tilelang/tilelang/engine/lower.py\", line 184, in _lower_with_context_impl\n    host_mod, device_mod, params, target, target_host = lower_to_host_device_ir(\n                                                        ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tilelang/tilelang/engine/lower.py\", line 136, in lower_to_host_device_ir\n    mod = context.lower(mod)\n          ^^^^^^^^^^^^^^^^^^\n  File \"/root/tilelang/tilelang/backend/module.py\", line 214, in lower\n    return self.module.lower(mod, self.target)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tilelang/tilelang/backend/module.py\", line 115, in lower\n    return self.get_pipeline(target).lower(mod, target)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tilelang/tilelang/backend/pass_pipeline/pipeline.py\", line 31, in lower\n    return self._lower(mod, target)\n           ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tilelang/tilelang/ascend/pipeline.py\", line 120, in AscendPassPipelineBody\n    mod = ascend_transform.PrepareMultiBuffer()(mod)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/tilelang/3rdparty/tvm/python/tvm/ir/transform.py\", line 171, in __call__\n    return _ffi_transform_api.RunPass(self, mod)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"python/tvm_ffi/cython/function.pxi\", line 968, in tvm_ffi.core.Function.__call__\n  File \"<unknown>\", line 0, in tvm::transform::Pass::operator()(tvm::IRModule) const\n  File \"<unknown>\", line 0, in tvm::transform::Pass::operator()(tvm::IRModule, tvm::transform::PassContext const&) const\n  File \"<unknown>\", line 0, in tvm::tirx::transform::PrimFuncPassNode::operator()(tvm::IRModule, tvm::transform::PassContext const&) const\n  File \"<unknown>\", line 0, in std::_Function_handler<tvm::tirx::PrimFunc (tvm::tirx::PrimFunc, tvm::IRModule, tvm::transform::PassContext), tvm::tl::PrepareMultiBuffer()::{lambda(tvm::tirx::PrimFunc, tvm::IRModule const&, tvm::transform::PassContext const&)#1}>::_M_invoke(std::_Any_data const&, tvm::tirx::PrimFunc&&, tvm::IRModule&&, tvm::transform::PassContext&&)\n  File \"<unknown>\", line 0, in tvm::tl::ascend::RewriteTilelangKernels(tvm::tirx::PrimFunc, char const*, std::function<tvm::tirx::SBlock (tvm::tl::ascend::TilelangKernelContext const&)> const&, bool)\n  File \"<unknown>\", line 0, in tvm::NodeFunctor<tvm::tirx::Stmt (tvm::ffi::ObjectRef const&, tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>*)>::operator()(tvm::ffi::ObjectRef const&, tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>*) const\n  File \"<unknown>\", line 0, in tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>::InitVTable()::{lambda(tvm::ffi::ObjectRef const&, tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>*)#13}::_FUN(tvm::ffi::ObjectRef const&, tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>*)\n  File \"<unknown>\", line 0, in tvm::tirx::StmtMutator::VisitStmt_(tvm::tirx::SBlockRealizeNode const*)\n  File \"<unknown>\", line 0, in tvm::tirx::StmtMutator::VisitStmt(tvm::tirx::Stmt const&)\n  File \"<unknown>\", line 0, in tvm::NodeFunctor<tvm::tirx::Stmt (tvm::ffi::ObjectRef const&, tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>*)>::operator()(tvm::ffi::ObjectRef const&, tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>*) const\n  File \"<unknown>\", line 0, in tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>::InitVTable()::{lambda(tvm::ffi::ObjectRef const&, tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>*)#12}::_FUN(tvm::ffi::ObjectRef const&, tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>*)\n  File \"<unknown>\", line 0, in tvm::tl::ascend::kernel_rewriter_detail::TilelangKernelRewriter::VisitStmt_(tvm::tirx::SBlockNode const*)\n  File \"<unknown>\", line 0, in tvm::tirx::StmtMutator::VisitStmt_(tvm::tirx::SBlockNode const*)\n  File \"<unknown>\", line 0, in tvm::tirx::StmtMutator::VisitStmt(tvm::tirx::Stmt const&)\n  File \"<unknown>\", line 0, in tvm::NodeFunctor<tvm::tirx::Stmt (tvm::ffi::ObjectRef const&, tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>*)>::operator()(tvm::ffi::ObjectRef const&, tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>*) const\n  File \"<unknown>\", line 0, in tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>::InitVTable()::{lambda(tvm::ffi::ObjectRef const&, tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>*)#2}::_FUN(tvm::ffi::ObjectRef const&, tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>*)\n  File \"<unknown>\", line 0, in tvm::tirx::StmtMutator::VisitStmt_(tvm::tirx::AttrStmtNode const*)\n  File \"<unknown>\", line 0, in tvm::tirx::StmtMutator::VisitStmt(tvm::tirx::Stmt const&)\n  File \"<unknown>\", line 0, in tvm::NodeFunctor<tvm::tirx::Stmt (tvm::ffi::ObjectRef const&, tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>*)>::operator()(tvm::ffi::ObjectRef const&, tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>*) const\n  File \"<unknown>\", line 0, in tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>::InitVTable()::{lambda(tvm::ffi::ObjectRef const&, tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>*)#13}::_FUN(tvm::ffi::ObjectRef const&, tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>*)\n  File \"<unknown>\", line 0, in tvm::tirx::StmtMutator::VisitStmt_(tvm::tirx::SBlockRealizeNode const*)\n  File \"<unknown>\", line 0, in tvm::tirx::StmtMutator::VisitStmt(tvm::tirx::Stmt const&)\n  File \"<unknown>\", line 0, in tvm::NodeFunctor<tvm::tirx::Stmt (tvm::ffi::ObjectRef const&, tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>*)>::operator()(tvm::ffi::ObjectRef const&, tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>*) const\n  File \"<unknown>\", line 0, in tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>::InitVTable()::{lambda(tvm::ffi::ObjectRef const&, tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>*)#12}::_FUN(tvm::ffi::ObjectRef const&, tvm::tirx::StmtFunctor<tvm::tirx::Stmt (tvm::tirx::Stmt const&)>*)\n  File \"<unknown>\", line 0, in tvm::tl::ascend::kernel_rewriter_detail::TilelangKernelRewriter::VisitStmt_(tvm::tirx::SBlockNode const*)\n  File \"<unknown>\", line 0, in std::_Function_handler<tvm::tirx::SBlock (tvm::tl::ascend::TilelangKernelContext const&), tvm::tl::PrepareMultiBuffer()::{lambda(tvm::tirx::PrimFunc, tvm::IRModule const&, tvm::transform::PassContext const&)#1}::operator()(tvm::tirx::PrimFunc, tvm::IRModule const&, tvm::transform::PassContext const&) const::{lambda(tvm::tl::ascend::TilelangKernelContext const&)#1}>::_M_invoke(std::_Any_data const&, tvm::tl::ascend::TilelangKernelContext const&)\n  File \"<unknown>\", line 0, in tvm::tl::PrepareMultiBuffer()::{lambda(tvm::tirx::PrimFunc, tvm::IRModule const&, tvm::transform::PassContext const&)#1}::operator()(tvm::tirx::PrimFunc, tvm::IRModule const&, tvm::transform::PassContext const&) const::{lambda(tvm::tl::ascend::TilelangKernelContext const&)#1}::operator()(tvm::tl::ascend::TilelangKernelContext const&) const [clone .isra.0]\n  File \"<unknown>\", line 0, in tvm::tl::(anonymous namespace)::MultiBufferPlanBuilder::Build()\n  File \"<unknown>\", line 0, in tvm::runtime::detail::LogFatal::~LogFatal()\ntvm.error.InternalError: Counter multi-buffer storage l1 is accessed at multiple schedule stages in one owner loop. Align their T.Stage values, provide a compatible manual owner, or use iteration mode with one owner\n",
+  "finished_at_utc": "2026-10-13T03:49:12.799096+00:00"
+}

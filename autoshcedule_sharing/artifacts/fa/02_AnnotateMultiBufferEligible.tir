@@ -1,0 +1,209 @@
+# from tvm.script import ir as I
+# from tvm.script import tirx as T
+
+@I.ir_module
+class Module:
+    @T.prim_func
+    def main(Q: T.Buffer((256, 128), "bfloat16"), K: T.Buffer((512, 128), "bfloat16"), V: T.Buffer((512, 128), "bfloat16"), O: T.Buffer((256, 128), "float32")):
+        T.func_attr({"target": T.target({"host": {"keys": ["cpu"], "kind": "c", "tag": ""}, "keys": ["ascend"], "kind": "ascend", "launch_grid_only": True, "max_vector_bits": 64, "supports_kernel_status_return": False, "supports_vector_predicate": True, "tag": ""})})
+        with T.sblock("root"):
+            T.reads()
+            T.writes()
+            P_nz_ub = T.Buffer((65, 128), "bfloat16", scope="shared.dyn")
+            pv_acc_l0c = T.Buffer((128, 128), scope="shared.l0c")
+            qk_acc_l0c = T.Buffer((128, 128), scope="shared.l0c")
+            Q_shared = T.Buffer((128, 128), "bfloat16", scope="shared.l1")
+            K_shared = T.Buffer((128, 128), "bfloat16", scope="shared.l1")
+            qk_a_l0 = T.Buffer((128, 128), "bfloat16", scope="shared.l0a")
+            qk_b_l0 = T.Buffer((128, 128), "bfloat16", scope="shared.l0b")
+            P_shared = T.Buffer((128, 128), "bfloat16", scope="shared.l1")
+            V_shared = T.Buffer((128, 128), "bfloat16", scope="shared.l1")
+            pv_a_l0 = T.Buffer((128, 128), "bfloat16", scope="shared.l0a")
+            pv_b_l0 = T.Buffer((128, 128), "bfloat16", scope="shared.l0b")
+            T.sblock_attr({"layout_map": {P_nz_ub: metadata["tl.Layout"][0], pv_acc_l0c: metadata["tl.AscendFractalLayout"][0], qk_acc_l0c: metadata["tl.AscendFractalLayout"][1], Q_shared: metadata["tl.AscendFractalLayout"][2], K_shared: metadata["tl.AscendFractalLayout"][3], qk_a_l0: metadata["tl.AscendFractalLayout"][4], qk_b_l0: metadata["tl.AscendFractalLayout"][5], P_shared: metadata["tl.AscendFractalLayout"][6], V_shared: metadata["tl.AscendFractalLayout"][7], pv_a_l0: metadata["tl.AscendFractalLayout"][8], pv_b_l0: metadata["tl.AscendFractalLayout"][9]}})
+            bx = T.launch_thread("blockIdx.x", 1)
+            sid = T.launch_thread("cthread", 2)
+            with T.sblock("tilelang_root"):
+                T.reads()
+                T.writes()
+                S_ub = T.handle("float32", "shared.dyn")
+                alpha_ub = T.handle("float32", "shared.dyn")
+                O_tmp_ub = T.handle("float32", "shared.dyn")
+                dst_nz_ptr = T.handle("handle", "local.var")
+                T.sblock_attr({"layout_map": {P_nz_ub: metadata["tl.Layout"][0], pv_acc_l0c: metadata["tl.AscendFractalLayout"][0], qk_acc_l0c: metadata["tl.AscendFractalLayout"][1], Q_shared: metadata["tl.AscendFractalLayout"][2], K_shared: metadata["tl.AscendFractalLayout"][3], qk_a_l0: metadata["tl.AscendFractalLayout"][4], qk_b_l0: metadata["tl.AscendFractalLayout"][5], P_shared: metadata["tl.AscendFractalLayout"][6], V_shared: metadata["tl.AscendFractalLayout"][7], pv_a_l0: metadata["tl.AscendFractalLayout"][8], pv_b_l0: metadata["tl.AscendFractalLayout"][9]}, "tl.buffer_versions_map": {K_shared.data: 3, V_shared.data: 3, qk_acc_l0c.data: 2, pv_acc_l0c.data: 2, S_ub: 3, P_nz_ub.data: 2, alpha_ub: 3, O_tmp_ub: 2}, "tl.simd_pointer_dtypes": {dst_nz_ptr: "bfloat16"}})
+                Q_shared = T.sblock_alloc_buffer((128, 128), "bfloat16", data=Q_shared.data, scope="shared.l1")
+                K_shared = T.sblock_alloc_buffer((128, 128), "bfloat16", data=K_shared.data, scope="shared.l1")
+                V_shared = T.sblock_alloc_buffer((128, 128), "bfloat16", data=V_shared.data, scope="shared.l1")
+                P_shared = T.sblock_alloc_buffer((128, 128), "bfloat16", data=P_shared.data, scope="shared.l1")
+                qk_a_l0 = T.sblock_alloc_buffer((128, 128), "bfloat16", data=qk_a_l0.data, scope="shared.l0a")
+                qk_b_l0 = T.sblock_alloc_buffer((128, 128), "bfloat16", data=qk_b_l0.data, scope="shared.l0b")
+                pv_a_l0 = T.sblock_alloc_buffer((128, 128), "bfloat16", data=pv_a_l0.data, scope="shared.l0a")
+                pv_b_l0 = T.sblock_alloc_buffer((128, 128), "bfloat16", data=pv_b_l0.data, scope="shared.l0b")
+                qk_acc_l0c = T.sblock_alloc_buffer((128, 128), data=qk_acc_l0c.data, scope="shared.l0c")
+                pv_acc_l0c = T.sblock_alloc_buffer((128, 128), data=pv_acc_l0c.data, scope="shared.l0c")
+                S_ub_1 = T.sblock_alloc_buffer((64, 128), data=S_ub, scope="shared.dyn")
+                P_nz_ub = T.sblock_alloc_buffer((65, 128), "bfloat16", data=P_nz_ub.data, scope="shared.dyn")
+                O_tmp_ub_1 = T.sblock_alloc_buffer((64, 128), data=O_tmp_ub, scope="shared.dyn")
+                O_ub = T.sblock_alloc_buffer((64, 128), scope="shared.dyn")
+                m_ub = T.sblock_alloc_buffer((64,), scope="shared.dyn")
+                l_ub = T.sblock_alloc_buffer((64,), scope="shared.dyn")
+                alpha_ub_1 = T.sblock_alloc_buffer((64,), data=alpha_ub, scope="shared.dyn")
+                old_m_ub = T.sblock_alloc_buffer((64,), scope="shared.dyn")
+                row_sum_ub = T.sblock_alloc_buffer((64,), scope="shared.dyn")
+                T.attr({"stage": -1}, "tl.schedule_unit", 1)
+                for local_mt in T.serial(2, annotations={"multi_buffer_eligible": [Q_shared.data, m_ub.data, l_ub.data, O_ub.data]}):
+                    with T.attr({"stage": -1}, "tl.schedule_unit", 1):
+                        T.attr({}, "tl.ascend_task", 1)
+                        T.ascend_copy(T.region(Q[local_mt * 128, 0], 1, 128, 128), T.region(Q_shared[0, 0], 2, 128, 128))
+                    with T.attr({"stage": -1}, "tl.schedule_unit", 1):
+                        T.attr({}, "tl.ascend_task", 1)
+                        with T.sblock("SIMD_VF", no_realize=True):
+                            T.reads()
+                            T.writes()
+                            T.sblock_attr({"tl.vf_latency": T.int64(400), "tl.vf_source_index": T.int64(0)})
+                            T.attr("simdvf", "tl.simdvf_scope", 1)
+                            init_mask: T.boolx256 = T.tl.simd.pset(32, "PAT_ALL")
+                            zero: T.float32x64 = T.tl.simd.vdup(T.float32(0.0), init_mask, "MODE_ZEROING")
+                            initial_m: T.float32x64 = T.tl.simd.vdup(T.infinity("float32") * T.float32(-1.0), init_mask, "MODE_ZEROING")
+                            T.tl.simd.vsts(T.access_ptr(l_ub[0], 64, 2), zero, init_mask, "NORM_B32")
+                            T.tl.simd.vsts(T.access_ptr(m_ub[0], 64, 2), initial_m, init_mask, "NORM_B32")
+                    with T.attr({"stage": -1}, "tl.schedule_unit", 1):
+                        T.attr({}, "tl.ascend_task", 1)
+                        with T.sblock("SIMD_VF", no_realize=True):
+                            T.reads()
+                            T.writes()
+                            T.sblock_attr({"tl.vf_latency": T.int64(142), "tl.vf_source_index": T.int64(1)})
+                            T.attr("simdvf", "tl.simdvf_scope", 1)
+                            clear_mask: T.boolx256 = T.tl.simd.pset(32, "PAT_ALL")
+                            output_zero: T.float32x64 = T.tl.simd.vdup(T.float32(0.0), clear_mask, "MODE_ZEROING")
+                            for i, _tmp in T.grid(64, 2):
+                                T.tl.simd.vsts(T.access_ptr(O_ub[i, _tmp * 64], 64, 2), output_zero, clear_mask, "NORM_B32")
+                    with T.attr({"stage": -1}, "tl.schedule_unit", 1):
+                        for kv in T.serial(4, annotations={"enable_offset": True, "multi_buffer_eligible": [K_shared.data, qk_a_l0.data, qk_b_l0.data, qk_acc_l0c.data, S_ub, old_m_ub.data, row_sum_ub.data, P_nz_ub.data, P_shared.data, V_shared.data, pv_a_l0.data, pv_b_l0.data, pv_acc_l0c.data, alpha_ub, O_tmp_ub], "num_stages": 3}):
+                            with T.attr({"stage": -1}, "tl.schedule_unit", 1):
+                                T.attr({}, "tl.ascend_task", 1)
+                                T.ascend_copy(T.region(K[kv * 128, 0], 1, 128, 128), T.region(K_shared[0, 0], 2, 128, 128))
+                            with T.attr({"stage": -1}, "tl.schedule_unit", 1):
+                                T.attr({}, "tl.ascend_task", 1)
+                                T.ascend_copy(T.region(Q_shared[0, 0], 1, 128, 128), T.region(qk_a_l0[0, 0], 2, 128, 128))
+                            with T.attr({"stage": -1}, "tl.schedule_unit", 1):
+                                T.attr({}, "tl.ascend_task", 1)
+                                T.ascend_copy(T.region(K_shared[0, 0], 1, 128, 128), T.region(qk_b_l0[0, 0], 2, 128, 128))
+                            with T.attr({"stage": -1}, "tl.schedule_unit", 1):
+                                T.attr({}, "tl.ascend_task", 1)
+                                T.gemm(T.region(qk_a_l0[0, 0], 1, 128, 128), T.region(qk_b_l0[0, 0], 1, 128, 128), T.region(qk_acc_l0c[0, 0], 2, 128, 128), T.bool(False), T.bool(True), 128, 128, 128, 0, T.bool(True), 0, 0, 0)
+                            with T.attr({"stage": -1}, "tl.schedule_unit", 1):
+                                T.attr({}, "tl.ascend_task", 1)
+                                T.ascend_copy(T.region(qk_acc_l0c[0, 0], 1, 128, 128), T.region(S_ub_1[0, 0], 2, 64, 128), dual_dst_ctl=1, l2_cache_ctrl=0)
+                            with T.attr({"stage": -1}, "tl.schedule_unit", 1):
+                                T.attr({}, "tl.ascend_task", 1)
+                                with T.sblock("SIMD_VF", no_realize=True):
+                                    T.reads()
+                                    T.writes()
+                                    T.sblock_attr({"tl.vf_latency": T.int64(735), "tl.vf_source_index": T.int64(2)})
+                                    dst_nz_ptr_1 = T.sblock_alloc_buffer((1,), "handle", data=dst_nz_ptr, scope="local.var")
+                                    T.attr("simdvf", "tl.simdvf_scope", 1)
+                                    softmax_full: T.boolx256 = T.tl.simd.pset(32, "PAT_ALL")
+                                    softmax_one: T.boolx256 = T.tl.simd.pset(32, "PAT_VL1")
+                                    softmax_b16: T.boolx256 = T.tl.simd.pset(16, "PAT_VL128")
+                                    dst_nz_ptr_1[0] = T.access_ptr(P_nz_ub[0, 0], 8320, 2)
+                                    T.tl.simd.vsts(T.access_ptr(old_m_ub[0], 64, 2), T.tl.simd.vld(T.access_ptr(m_ub[0], 64, 1), "NORM"), softmax_full, "NORM_B32")
+                                    for _tmp in range(32):
+                                        s00: T.float32x64 = T.tl.simd.vmuls(T.tl.simd.vld(T.access_ptr(S_ub_1[_tmp * 2, 0], 64, 1), "NORM"), T.float32(0.088388347648318433), softmax_full, "MODE_ZEROING")
+                                        s01: T.float32x64 = T.tl.simd.vmuls(T.tl.simd.vld(T.access_ptr(S_ub_1[_tmp * 2, 64], 64, 1), "NORM"), T.float32(0.088388347648318433), softmax_full, "MODE_ZEROING")
+                                        s10: T.float32x64 = T.tl.simd.vmuls(T.tl.simd.vld(T.access_ptr(S_ub_1[_tmp * 2 + 1, 0], 64, 1), "NORM"), T.float32(0.088388347648318433), softmax_full, "MODE_ZEROING")
+                                        s11: T.float32x64 = T.tl.simd.vmuls(T.tl.simd.vld(T.access_ptr(S_ub_1[_tmp * 2 + 1, 64], 64, 1), "NORM"), T.float32(0.088388347648318433), softmax_full, "MODE_ZEROING")
+                                        T.tl.simd.vsts(T.access_ptr(S_ub_1[_tmp * 2, 0], 64, 2), s00, softmax_full, "NORM_B32")
+                                        T.tl.simd.vsts(T.access_ptr(S_ub_1[_tmp * 2, 64], 64, 2), s01, softmax_full, "NORM_B32")
+                                        T.tl.simd.vsts(T.access_ptr(S_ub_1[_tmp * 2 + 1, 0], 64, 2), s10, softmax_full, "NORM_B32")
+                                        T.tl.simd.vsts(T.access_ptr(S_ub_1[_tmp * 2 + 1, 64], 64, 2), s11, softmax_full, "NORM_B32")
+                                        max0: T.float32x64 = T.tl.simd.vcmax(T.tl.simd.vmax(s00, s01, softmax_full, "MODE_ZEROING"), softmax_full, "MODE_ZEROING")
+                                        max1: T.float32x64 = T.tl.simd.vcmax(T.tl.simd.vmax(s10, s11, softmax_full, "MODE_ZEROING"), softmax_full, "MODE_ZEROING")
+                                        T.tl.simd.vsts(T.access_ptr(m_ub[_tmp * 2], 1, 2), max0, softmax_one, "ONEPT_B32")
+                                        T.tl.simd.vsts(T.access_ptr(m_ub[_tmp * 2 + 1], 1, 2), max1, softmax_one, "ONEPT_B32")
+                                    T.tl.simd.mem_bar("VST_VLD")
+                                    merged_max: T.float32x64 = T.tl.simd.vmax(T.tl.simd.vld(T.access_ptr(m_ub[0], 64, 1), "NORM"), T.tl.simd.vld(T.access_ptr(old_m_ub[0], 64, 1), "NORM"), softmax_full, "MODE_ZEROING")
+                                    T.tl.simd.vsts(T.access_ptr(m_ub[0], 64, 2), merged_max, softmax_full, "NORM_B32")
+                                    T.tl.simd.mem_bar("VST_VLD")
+                                    for _tmp in range(32):
+                                        max0: T.float32x64 = T.tl.simd.vld(T.access_ptr(m_ub[_tmp * 2], 1, 1), "BRC_B32")
+                                        max1: T.float32x64 = T.tl.simd.vld(T.access_ptr(m_ub[_tmp * 2 + 1], 1, 1), "BRC_B32")
+                                        v: T.float32x64 = T.tl.simd.vld2(T.access_ptr(S_ub_1[_tmp * 2, 0], 128, 1), "DINTLV_B32")
+                                        p00: T.float32x64 = T.tl.simd.pair_get(v, 0)
+                                        p01: T.float32x64 = T.tl.simd.pair_get(v, 1)
+                                        v_1: T.float32x64 = T.tl.simd.vld2(T.access_ptr(S_ub_1[_tmp * 2 + 1, 0], 128, 1), "DINTLV_B32")
+                                        p10: T.float32x64 = T.tl.simd.pair_get(v_1, 0)
+                                        p11: T.float32x64 = T.tl.simd.pair_get(v_1, 1)
+                                        e00: T.float32x64 = T.tl.simd.vexpdif(p00, max0, softmax_full)
+                                        e10: T.float32x64 = T.tl.simd.vexpdif(p10, max1, softmax_full)
+                                        e01: T.float32x64 = T.tl.simd.vexpdif(p01, max0, softmax_full)
+                                        e11: T.float32x64 = T.tl.simd.vexpdif(p11, max1, softmax_full)
+                                        row_sum0: T.float32x64 = T.tl.simd.vcadd(T.tl.simd.vadd(e00, e01, softmax_full, "MODE_ZEROING"), softmax_full, "MODE_ZEROING")
+                                        row_sum1: T.float32x64 = T.tl.simd.vcadd(T.tl.simd.vadd(e10, e11, softmax_full, "MODE_ZEROING"), softmax_full, "MODE_ZEROING")
+                                        T.tl.simd.vsts(T.access_ptr(row_sum_ub[_tmp * 2], 1, 2), row_sum0, softmax_one, "ONEPT_B32")
+                                        T.tl.simd.vsts(T.access_ptr(row_sum_ub[_tmp * 2 + 1], 1, 2), row_sum1, softmax_one, "ONEPT_B32")
+                                        even_bf16_0: T.bfloat16x128 = T.tl.simd.vcvt(e00, softmax_full, "ROUND_R", "RS_DISABLE", "PART_EVEN", "MODE_ZEROING")
+                                        even_bf16_1: T.bfloat16x128 = T.tl.simd.vcvt(e10, softmax_full, "ROUND_R", "RS_DISABLE", "PART_EVEN", "MODE_ZEROING")
+                                        odd_bf16_0: T.bfloat16x128 = T.tl.simd.vcvt(e01, softmax_full, "ROUND_R", "RS_DISABLE", "PART_ODD", "MODE_ZEROING")
+                                        odd_bf16_1: T.bfloat16x128 = T.tl.simd.vcvt(e11, softmax_full, "ROUND_R", "RS_DISABLE", "PART_ODD", "MODE_ZEROING")
+                                        merged_bits0: T.uint16x128 = T.tl.simd.vor(T.reinterpret("uint16x128", even_bf16_0), T.reinterpret("uint16x128", odd_bf16_0), softmax_b16, "MODE_ZEROING")
+                                        merged_bits1: T.uint16x128 = T.tl.simd.vor(T.reinterpret("uint16x128", even_bf16_1), T.reinterpret("uint16x128", odd_bf16_1), softmax_b16, "MODE_ZEROING")
+                                        dst_nz_ptr_1[0] = T.tl.simd.vsstb(T.reinterpret("bfloat16x128", merged_bits0), dst_nz_ptr_1[0], 4259841, softmax_b16, "POST_UPDATE")
+                                        dst_nz_ptr_1[0] = T.tl.simd.vsstb(T.reinterpret("bfloat16x128", merged_bits1), dst_nz_ptr_1[0], 4259841, softmax_b16, "POST_UPDATE")
+                                    T.tl.simd.mem_bar("VST_VLD")
+                                    alpha_reg: T.float32x64 = T.tl.simd.vexpdif(T.tl.simd.vld(T.access_ptr(old_m_ub[0], 64, 1), "NORM"), T.tl.simd.vld(T.access_ptr(m_ub[0], 64, 1), "NORM"), softmax_full)
+                                    T.tl.simd.vsts(T.access_ptr(alpha_ub_1[0], 64, 2), alpha_reg, softmax_full, "NORM_B32")
+                                    l_scaled: T.float32x64 = T.tl.simd.vmul(T.tl.simd.vld(T.access_ptr(l_ub[0], 64, 1), "NORM"), alpha_reg, softmax_full, "MODE_ZEROING")
+                                    l_updated: T.float32x64 = T.tl.simd.vadd(l_scaled, T.tl.simd.vld(T.access_ptr(row_sum_ub[0], 64, 1), "NORM"), softmax_full, "MODE_ZEROING")
+                                    T.tl.simd.vsts(T.access_ptr(l_ub[0], 64, 2), l_updated, softmax_full, "NORM_B32")
+                            with T.attr({"stage": -1}, "tl.schedule_unit", 1):
+                                T.attr({}, "tl.ascend_task", 1)
+                                T.ascend_nd2nz_post_copy(T.access_ptr(P_shared[sid * 64, 0], 8192, 2), T.access_ptr(P_nz_ub[0, 0], 8320, 1), 64, 128, 128, "bfloat16_t")
+                            with T.attr({"stage": -1}, "tl.schedule_unit", 1):
+                                T.attr({}, "tl.ascend_task", 1)
+                                T.ascend_copy(T.region(V[kv * 128, 0], 1, 128, 128), T.region(V_shared[0, 0], 2, 128, 128), transpose=1)
+                            with T.attr({"stage": -1}, "tl.schedule_unit", 1):
+                                T.attr({}, "tl.ascend_task", 1)
+                                T.ascend_copy(T.region(P_shared[0, 0], 1, 128, 128), T.region(pv_a_l0[0, 0], 2, 128, 128))
+                            with T.attr({"stage": -1}, "tl.schedule_unit", 1):
+                                T.attr({}, "tl.ascend_task", 1)
+                                T.ascend_copy(T.region(V_shared[0, 0], 1, 128, 128), T.region(pv_b_l0[0, 0], 2, 128, 128))
+                            with T.attr({"stage": -1}, "tl.schedule_unit", 1):
+                                T.attr({}, "tl.ascend_task", 1)
+                                T.gemm(T.region(pv_a_l0[0, 0], 1, 128, 128), T.region(pv_b_l0[0, 0], 1, 128, 128), T.region(pv_acc_l0c[0, 0], 2, 128, 128), T.bool(False), T.bool(True), 128, 128, 128, 0, T.bool(True), 0, 0, 0)
+                            with T.attr({"stage": -1}, "tl.schedule_unit", 1):
+                                T.attr({}, "tl.ascend_task", 1)
+                                T.ascend_copy(T.region(pv_acc_l0c[0, 0], 1, 128, 128), T.region(O_tmp_ub_1[0, 0], 2, 64, 128), dual_dst_ctl=1, l2_cache_ctrl=0)
+                            T.attr({"stage": -1}, "tl.schedule_unit", 1)
+                            T.attr({}, "tl.ascend_task", 1)
+                            with T.sblock("SIMD_VF", no_realize=True):
+                                T.reads()
+                                T.writes()
+                                T.sblock_attr({"tl.vf_latency": T.int64(318), "tl.vf_source_index": T.int64(3)})
+                                T.attr("simdvf", "tl.simdvf_scope", 1)
+                                rescale_mask: T.boolx256 = T.tl.simd.pset(32, "PAT_ALL")
+                                for i in range(64):
+                                    alpha: T.float32x64 = T.tl.simd.vld(T.access_ptr(alpha_ub_1[i], 1, 1), "BRC_B32")
+                                    for _tmp in range(2):
+                                        prev: T.float32x64 = T.tl.simd.vld(T.access_ptr(O_ub[i, _tmp * 64], 64, 1), "NORM")
+                                        cur: T.float32x64 = T.tl.simd.vld(T.access_ptr(O_tmp_ub_1[i, _tmp * 64], 64, 1), "NORM")
+                                        updated: T.float32x64 = T.tl.simd.vadd(T.tl.simd.vmul(alpha, prev, rescale_mask, "MODE_ZEROING"), cur, rescale_mask, "MODE_ZEROING")
+                                        T.tl.simd.vsts(T.access_ptr(O_ub[i, _tmp * 64], 64, 2), updated, rescale_mask, "NORM_B32")
+                    with T.attr({"stage": -1}, "tl.schedule_unit", 1):
+                        T.attr({}, "tl.ascend_task", 1)
+                        with T.sblock("SIMD_VF", no_realize=True):
+                            T.reads()
+                            T.writes()
+                            T.sblock_attr({"tl.vf_latency": T.int64(1780), "tl.vf_source_index": T.int64(4)})
+                            T.attr("simdvf", "tl.simdvf_scope", 1)
+                            normalize_mask: T.boolx256 = T.tl.simd.pset(32, "PAT_ALL")
+                            for i in range(64):
+                                denominator: T.float32x64 = T.tl.simd.vld(T.access_ptr(l_ub[i], 1, 1), "BRC_B32")
+                                for _tmp in range(2):
+                                    normalized: T.float32x64 = T.tl.simd.vdiv(T.tl.simd.vld(T.access_ptr(O_ub[i, _tmp * 64], 64, 1), "NORM"), denominator, normalize_mask, "MODE_ZEROING")
+                                    T.tl.simd.vsts(T.access_ptr(O_ub[i, _tmp * 64], 64, 2), normalized, normalize_mask, "NORM_B32")
+                    T.attr({"stage": -1}, "tl.schedule_unit", 1)
+                    T.attr({}, "tl.ascend_task", 1)
+                    T.ascend_copy(T.region(O_ub[0, 0], 1, 64, 128), T.region(O[local_mt * 128 + sid * 64, 0], 2, 64, 128), l2_cache_ctrl=0)
+
+# Metadata omitted. Use show_meta=True in script() method to show it.

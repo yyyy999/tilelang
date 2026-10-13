@@ -1,0 +1,1761 @@
+{
+  "case": "fa",
+  "started_at_utc": "2026-10-13T03:49:49.001462+00:00",
+  "status": "success",
+  "python": "/root/tilelang-venv/bin/python",
+  "working_directory": "/root/tilelang",
+  "tilelang_python": "/root/tilelang/tilelang/__init__.py",
+  "tvm_python": "/root/tilelang/3rdparty/tvm/python/tvm/__init__.py",
+  "compiler_checkout": "/root/tilelang",
+  "compiler_revision": "789afc9632059c7404ffd10e188c6a073be40e15",
+  "sharing_checkout": "/mnt/d/codes/yyz/tilelang",
+  "sharing_revision": "fbd7cf81c700dc3f5b2d54fa9ef1b5d7cc8c7907",
+  "z3_version": "4.15.4",
+  "enable_device_compile": false,
+  "input_sha256": {
+    "minimal.py": "e97e1da1727a57af8e89afea8625ce44fe9cb8a8230589eeb5e13b2d137cf4d9",
+    "fa.py": "5ee42afa9cc7ce2a49b3c5499dd20cfb1e6834945a99cdfa8de1eb12da341353",
+    "fa_core.py": "0c1af6f07f2c727ca6ef6d09d4ce3c21ce16286d5931e75e8a9c6f2248ed23b0"
+  },
+  "parameters": {
+    "q_len": 256,
+    "kv_len": 512,
+    "head_dim": 128,
+    "num_blocks": 1,
+    "manual_schedule": false
+  },
+  "snapshots": [
+    {
+      "pass": "tl.MaterializeScheduleUnits",
+      "file": "01_MaterializeScheduleUnits.tir",
+      "lines": 209,
+      "schedule_unit_stages": [
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "task_metadata": [
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {}
+      ]
+    },
+    {
+      "pass": "tl.AnnotateMultiBufferEligible",
+      "file": "02_AnnotateMultiBufferEligible.tir",
+      "lines": 209,
+      "schedule_unit_stages": [
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "task_metadata": [
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {}
+      ]
+    },
+    {
+      "pass": "tl.EstimateLatency",
+      "file": "03_EstimateLatency.tir",
+      "lines": 209,
+      "schedule_unit_stages": [
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "task_metadata": [
+        {
+          "latency": "T.int64(518)",
+          "ii": "T.int64(328)"
+        },
+        {
+          "latency": "T.int64(400)",
+          "ii": "T.int64(400)"
+        },
+        {
+          "latency": "T.int64(142)",
+          "ii": "T.int64(142)"
+        },
+        {
+          "latency": "T.int64(518)",
+          "ii": "T.int64(328)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)"
+        },
+        {
+          "latency": "T.int64(520)",
+          "ii": "T.int64(512)"
+        },
+        {
+          "latency": "T.int64(311)",
+          "ii": "T.int64(258)"
+        },
+        {
+          "latency": "T.int64(735)",
+          "ii": "T.int64(735)"
+        },
+        {
+          "latency": "T.int64(171)",
+          "ii": "T.int64(128)"
+        },
+        {
+          "latency": "T.int64(518)",
+          "ii": "T.int64(328)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)"
+        },
+        {
+          "latency": "T.int64(520)",
+          "ii": "T.int64(512)"
+        },
+        {
+          "latency": "T.int64(311)",
+          "ii": "T.int64(258)"
+        },
+        {
+          "latency": "T.int64(318)",
+          "ii": "T.int64(318)"
+        },
+        {
+          "latency": "T.int64(1780)",
+          "ii": "T.int64(1780)"
+        },
+        {
+          "latency": "T.int64(750)",
+          "ii": "T.int64(570)"
+        }
+      ]
+    },
+    {
+      "pass": "tl.AutoSchedule",
+      "file": "04_AutoSchedule.tir",
+      "lines": 214,
+      "schedule_unit_stages": [
+        0,
+        0,
+        0,
+        5,
+        3,
+        1,
+        3,
+        2,
+        0,
+        3,
+        0,
+        4,
+        0,
+        2,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "task_metadata": [
+        {
+          "latency": "T.int64(518)",
+          "ii": "T.int64(328)"
+        },
+        {
+          "latency": "T.int64(400)",
+          "ii": "T.int64(400)"
+        },
+        {
+          "latency": "T.int64(142)",
+          "ii": "T.int64(142)"
+        },
+        {
+          "latency": "T.int64(318)",
+          "ii": "T.int64(318)"
+        },
+        {
+          "latency": "T.int64(171)",
+          "ii": "T.int64(128)"
+        },
+        {
+          "latency": "T.int64(518)",
+          "ii": "T.int64(328)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)"
+        },
+        {
+          "latency": "T.int64(735)",
+          "ii": "T.int64(735)"
+        },
+        {
+          "latency": "T.int64(518)",
+          "ii": "T.int64(328)"
+        },
+        {
+          "latency": "T.int64(520)",
+          "ii": "T.int64(512)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)"
+        },
+        {
+          "latency": "T.int64(311)",
+          "ii": "T.int64(258)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)"
+        },
+        {
+          "latency": "T.int64(520)",
+          "ii": "T.int64(512)"
+        },
+        {
+          "latency": "T.int64(311)",
+          "ii": "T.int64(258)"
+        },
+        {
+          "latency": "T.int64(1780)",
+          "ii": "T.int64(1780)"
+        },
+        {
+          "latency": "T.int64(750)",
+          "ii": "T.int64(570)"
+        }
+      ]
+    },
+    {
+      "pass": "tl.AssignCore",
+      "file": "05_AssignCore.tir",
+      "lines": 214,
+      "schedule_unit_stages": [
+        0,
+        0,
+        0,
+        5,
+        3,
+        1,
+        3,
+        2,
+        0,
+        3,
+        0,
+        4,
+        0,
+        2,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "task_metadata": [
+        {
+          "latency": "T.int64(518)",
+          "ii": "T.int64(328)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(400)",
+          "ii": "T.int64(400)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(142)",
+          "ii": "T.int64(142)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(318)",
+          "ii": "T.int64(318)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(171)",
+          "ii": "T.int64(128)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(518)",
+          "ii": "T.int64(328)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(735)",
+          "ii": "T.int64(735)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(518)",
+          "ii": "T.int64(328)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(520)",
+          "ii": "T.int64(512)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(311)",
+          "ii": "T.int64(258)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(520)",
+          "ii": "T.int64(512)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(311)",
+          "ii": "T.int64(258)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(1780)",
+          "ii": "T.int64(1780)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(750)",
+          "ii": "T.int64(570)",
+          "core_mask": "T.int64(1)"
+        }
+      ]
+    },
+    {
+      "pass": "tl.PrepareMultiBuffer",
+      "file": "06_PrepareMultiBuffer.tir",
+      "lines": 214,
+      "schedule_unit_stages": [
+        0,
+        0,
+        0,
+        5,
+        3,
+        1,
+        3,
+        2,
+        0,
+        3,
+        0,
+        4,
+        0,
+        2,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "task_metadata": [
+        {
+          "latency": "T.int64(518)",
+          "ii": "T.int64(328)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(400)",
+          "ii": "T.int64(400)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(142)",
+          "ii": "T.int64(142)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(318)",
+          "ii": "T.int64(318)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(171)",
+          "ii": "T.int64(128)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(518)",
+          "ii": "T.int64(328)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(735)",
+          "ii": "T.int64(735)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(518)",
+          "ii": "T.int64(328)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(520)",
+          "ii": "T.int64(512)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(311)",
+          "ii": "T.int64(258)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(520)",
+          "ii": "T.int64(512)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(311)",
+          "ii": "T.int64(258)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(1780)",
+          "ii": "T.int64(1780)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(750)",
+          "ii": "T.int64(570)",
+          "core_mask": "T.int64(1)"
+        }
+      ]
+    },
+    {
+      "pass": "tl.ResolveCore",
+      "file": "07_ResolveCore.tir",
+      "lines": 214,
+      "schedule_unit_stages": [
+        0,
+        0,
+        0,
+        5,
+        3,
+        1,
+        3,
+        2,
+        0,
+        3,
+        0,
+        4,
+        0,
+        2,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "task_metadata": [
+        {
+          "latency": "T.int64(518)",
+          "ii": "T.int64(328)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(400)",
+          "ii": "T.int64(400)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(142)",
+          "ii": "T.int64(142)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(318)",
+          "ii": "T.int64(318)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(171)",
+          "ii": "T.int64(128)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(518)",
+          "ii": "T.int64(328)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(735)",
+          "ii": "T.int64(735)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(518)",
+          "ii": "T.int64(328)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(520)",
+          "ii": "T.int64(512)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(311)",
+          "ii": "T.int64(258)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(520)",
+          "ii": "T.int64(512)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(311)",
+          "ii": "T.int64(258)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(1780)",
+          "ii": "T.int64(1780)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(750)",
+          "ii": "T.int64(570)",
+          "core_mask": "T.int64(1)"
+        }
+      ]
+    },
+    {
+      "pass": "tl.InsertSync",
+      "file": "08_InsertSync.tir",
+      "lines": 528,
+      "schedule_unit_stages": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        5,
+        5,
+        5,
+        3,
+        3,
+        3,
+        3,
+        3,
+        1,
+        1,
+        1,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        2,
+        2,
+        2,
+        2,
+        2,
+        0,
+        0,
+        0,
+        3,
+        3,
+        3,
+        3,
+        3,
+        0,
+        0,
+        0,
+        0,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        0,
+        0,
+        0,
+        0,
+        2,
+        2,
+        2,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "task_metadata": [
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(518)",
+          "ii": "T.int64(328)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(400)",
+          "ii": "T.int64(400)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(142)",
+          "ii": "T.int64(142)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(318)",
+          "ii": "T.int64(318)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(171)",
+          "ii": "T.int64(128)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(518)",
+          "ii": "T.int64(328)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(735)",
+          "ii": "T.int64(735)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(518)",
+          "ii": "T.int64(328)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(520)",
+          "ii": "T.int64(512)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(311)",
+          "ii": "T.int64(258)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(520)",
+          "ii": "T.int64(512)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(311)",
+          "ii": "T.int64(258)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(1780)",
+          "ii": "T.int64(1780)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(750)",
+          "ii": "T.int64(570)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        }
+      ]
+    },
+    {
+      "pass": "tl.MaterializeMultiBuffer",
+      "file": "09_MaterializeMultiBuffer.tir",
+      "lines": 533,
+      "schedule_unit_stages": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        5,
+        5,
+        5,
+        3,
+        3,
+        3,
+        3,
+        3,
+        1,
+        1,
+        1,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        2,
+        2,
+        2,
+        2,
+        2,
+        0,
+        0,
+        0,
+        3,
+        3,
+        3,
+        3,
+        3,
+        0,
+        0,
+        0,
+        0,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        0,
+        0,
+        0,
+        0,
+        2,
+        2,
+        2,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "task_metadata": [
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(518)",
+          "ii": "T.int64(328)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(400)",
+          "ii": "T.int64(400)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(142)",
+          "ii": "T.int64(142)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(318)",
+          "ii": "T.int64(318)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(171)",
+          "ii": "T.int64(128)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(518)",
+          "ii": "T.int64(328)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(735)",
+          "ii": "T.int64(735)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(518)",
+          "ii": "T.int64(328)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(520)",
+          "ii": "T.int64(512)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(311)",
+          "ii": "T.int64(258)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(133)",
+          "ii": "T.int64(131)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(520)",
+          "ii": "T.int64(512)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(311)",
+          "ii": "T.int64(258)",
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "latency": "T.int64(1780)",
+          "ii": "T.int64(1780)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "latency": "T.int64(750)",
+          "ii": "T.int64(570)",
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        },
+        {
+          "core_mask": "T.int64(1)"
+        },
+        {
+          "core_mask": "T.int64(2)"
+        }
+      ]
+    },
+    {
+      "pass": "tl.LowerScheduledTIR",
+      "file": "10_LowerScheduledTIR.tir",
+      "lines": 353,
+      "schedule_unit_stages": [],
+      "task_metadata": []
+    }
+  ],
+  "source_lines": 280,
+  "finished_at_utc": "2026-10-13T03:49:50.126914+00:00"
+}
