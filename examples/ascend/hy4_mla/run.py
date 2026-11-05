@@ -22,19 +22,37 @@ def main():
     parser.add_argument("--repeat", type=int, default=0)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--no-pipeline", action="store_true")
+    parser.add_argument(
+        "--implementation", choices=["hy4", "flashmla"], default="hy4", help="Hy4 QK576 or the original TileLang FlashMLA QK512 baseline"
+    )
     args = parser.parse_args()
     torch.set_num_threads(4)
     torch.npu.set_op_timeout_ms(30000)
     inputs = make_inputs(args.nq, args.nk, args.topk)
-    expected = sparse_mla_reference(*inputs, scale=args.scale)
+    reference_inputs = inputs
+    compile_kernel = compile_bf16
+    if args.implementation == "flashmla":
+        from examples.ascend.flashmla.prefill import compile_prefill
+
+        q, kv, indices, attn_sink, lengths = inputs
+        # Preserve the same latent values, indices, lengths, scale and sink.
+        # Zero the reference RoPE query to check the 512-dimensional baseline.
+        reference_q = q.clone()
+        reference_q[..., 512:] = 0
+        reference_inputs = reference_q, kv, indices, attn_sink, lengths
+        inputs = q[..., :512].contiguous(), kv[:, :512].contiguous(), indices, attn_sink, lengths
+        compile_kernel = compile_prefill
+    expected = sparse_mla_reference(*reference_inputs, scale=args.scale)
     device_inputs = tuple(t.npu() for t in inputs)
-    kernel = compile_bf16(args.nq, args.nk, args.topk, scale=args.scale, variable_lengths=True, pipeline_stages=not args.no_pipeline)
+    kernel = compile_kernel(args.nq, args.nk, args.topk, scale=args.scale, variable_lengths=True, pipeline_stages=not args.no_pipeline)
     actual = kernel(*device_inputs)
     torch.npu.synchronize()
     result = vars(args).copy()
     result.pop("output")
     result["accuracy"] = check_outputs(actual, expected)
     result["device"] = torch.npu.get_device_name()
+    result["dqk"] = 512 if args.implementation == "flashmla" else 576
+    result["dv"] = 512
     if args.repeat > 0:
         for _ in range(5):
             kernel(*device_inputs)
