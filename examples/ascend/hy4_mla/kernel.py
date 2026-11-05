@@ -218,10 +218,10 @@ def hy4_sparse_attention(nq, nk, topk=2048, *, scale, sink=True, variable_length
             aq = T.alloc_l0a((64, 128), "bfloat16")
             bq = T.alloc_l0b((64, 128), "bfloat16")
             bv = T.view(bq, shape=(64, 128))
-            aq_rope = T.view(aq, shape=(64, 64))
-            bq_rope = T.view(bq, shape=(64, 64))
             cq = T.alloc_l0c((64, 64), "float32")
             cpv = T.alloc_l0c((4, 64, 128), "float32")
+            # A BF16 SIMD load reads 128 elements, including at column 512.
+            # Pad each gathered row so the RoPE load stays within its UB row.
             kv = T.alloc_shared((32, 640), "bfloat16")
             nz_rope = T.alloc_shared((33, 64), "bfloat16")
             nz = T.alloc_shared((33, 512), "bfloat16")
@@ -246,14 +246,14 @@ def hy4_sparse_attention(nq, nk, topk=2048, *, scale, sink=True, variable_length
             ss = T.alloc_ss((2,), "uint32")
             ss_pairs = T.view(ss, shape=(1,), dtype="uint64")
             ss_result = T.alloc_ss((1,), "uint32")
+            # Preserve the four 128 KiB regions used by the latent pipeline.
+            # S occupies 16 KiB; two 16 KiB RoPE rings and Q follow it.
             T.annotate_buffer_addresses(
                 {kv_l1_0: 0, q_l1: 131072, kv_l1_1: 262144, s_l1: 393216, rope_l1_0: 409600, rope_l1_1: 425984, q_rope_l1: 442368}
             )
             T.annotate_layout(
                 {
                     aq: make_ascend_major_k_layout(aq),
-                    aq_rope: make_ascend_major_k_layout(aq_rope),
-                    bq_rope: make_ascend_major_k_layout(bq_rope),
                     bq: make_ascend_major_k_layout(bq),
                     bv: make_ascend_major_mn_layout(bv),
                     q_l1: make_ascend_major_k_layout(q_l1),
@@ -286,7 +286,9 @@ def hy4_sparse_attention(nq, nk, topk=2048, *, scale, sink=True, variable_length
                     bq: 4,
                     cq: 1,
                     cpv: 1,
-                    kv: 3,
+                    # Gather at stage 1, pack at stage 2: two versions bound
+                    # the next producer while retaining DMA/packing overlap.
+                    kv: 2,
                     nz: 1,
                     p: 1,
                     s: 1,
@@ -382,11 +384,11 @@ def hy4_sparse_attention(nq, nk, topk=2048, *, scale, sink=True, variable_length
                             T.copy(kv_l1_1[:, d * 128 : (d + 1) * 128], bq[32:, :], l0_pitch=4)
                         T.gemm(aq, bq, cq, transpose_B=True, clear_accum=d == 0, unit_flag_ctrl=2)
                     # Publish scores only after the additional RoPE dot product.
-                    T.copy(q_rope_l1[job % q_slots, :, :], aq_rope)
+                    T.copy(q_rope_l1[job % q_slots, :, :], aq[:, :64], l0_pitch=4)
                     with T.Task():
-                        T.copy(rope_l1_0, bq_rope[:32, :], l0_pitch=4)
-                        T.copy(rope_l1_1, bq_rope[32:, :], l0_pitch=4)
-                    T.gemm(aq_rope, bq_rope, cq, transpose_B=True, clear_accum=False, unit_flag_ctrl=3)
+                        T.copy(rope_l1_0, bq[:32, :64], l0_pitch=4)
+                        T.copy(rope_l1_1, bq[32:, :64], l0_pitch=4)
+                    T.gemm(aq[:, :64], bq[:, :64], cq, transpose_B=True, clear_accum=False, unit_flag_ctrl=3)
                     T.dual_copy(cq, p, unit_flag_ctrl=3)
                     if k == 0:
                         with T.SimdVF():

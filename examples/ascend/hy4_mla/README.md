@@ -20,6 +20,16 @@ causal mask. No paged or quantized KV cache adapter is included yet.
 
 ## Run
 
+Run the source-level resource and alias checks locally first (stdlib only):
+
+```bash
+python examples/ascend/hy4_mla/check_resources.py --details
+python -m unittest examples.ascend.hy4_mla.test_static -v
+```
+
+See [STATIC_CHECKS.md](STATIC_CHECKS.md) for budgets, address analysis and the
+boundary between source checks, compiler checks and device acceptance.
+
 Build the current TileLang checkout with Ascend support. From the repository root:
 
 ```bash
@@ -46,6 +56,7 @@ device jobs can distort results. There is no Hy4 performance claim yet.
 | `test_reference.py` | Hand-computable CPU semantic tests |
 | `test_hy4_mla.py` | NPU correctness and persistent-query regressions |
 | `run.py` | Single-case verification and optional warm-cache timing |
+| `check_resources.py`, `test_static.py` | Local allocation/alias/address budget checks without TileLang/NPU |
 
 The initial implementation is under validation. A successful syntax check alone
 does not establish compilation, device correctness or high performance.

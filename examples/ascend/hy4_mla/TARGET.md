@@ -62,7 +62,7 @@ q192 (c512 W_K)^T = (q192 W_K^T) c512^T
 
 ## 4. 第一阶段接口合同（实施选择）
 
-建议 builder 命名为 `hy4_sparse_attention`，编译入口命名为 `compile_bf16`。下列是目标合同，并非已存在的 Python API。
+builder 为 `hy4_sparse_attention`，编译入口为 `compile_bf16`。下列为第一阶段接口合同，运行覆盖范围单独记录。
 
 静态参数：`nq > 0`、`nk > 0`、`H=64`、`Dqk=576`、`Dv=512`、`K > 0` 且 `K % 64 == 0`；主优化目标为 `K=2048`。`scale` 显式传入，支持 `variable_lengths` 和用于对照的 `sink` 开关。
 
@@ -132,9 +132,9 @@ TopK2048对应32个64-token块；当前`q_prefetch`仅在4≤nb≤15启用，目
 - 新MLA的4 GiB cache限制、物理slot索引约定等仅在采用其packed路径时继承；BF16接口以KV行索引合同为准。
 - 共享索引仅共享选择结果，各层KV数据仍独立；由框架维护其生命周期。
 
-## 8. 计划目录结构
+## 8. 目录结构
 
-本轮仅创建本文。后续按现有FlashMLA组织方式逐步加入实际实现：
+按现有FlashMLA组织方式加入以下实现与验证入口：
 
 ```text
 hy4_mla/
@@ -144,7 +144,8 @@ hy4_mla/
   reference.py       # 独立FP32数学reference及兼容性输出约定
   testing.py         # 输入构造与接口适配
   test_hy4_mla.py    # NPU精度和边界回归
-  run_prefill.py     # 校验后性能测量，输出原始记录
+  test_reference.py # CPU手算语义测试
+  run.py            # 校验后可选事件计时，输出原始记录
 ```
 
 量化`decode.py`及`quantization.py`在缓存合同确定后新增，不预先复制不兼容的V4.1接口。
