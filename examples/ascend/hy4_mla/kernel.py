@@ -208,12 +208,9 @@ def hy4_sparse_attention(nq, nk, topk=2048, *, scale, sink=True, variable_length
     @T.macro
     def attention_body(Q, KV, Indices, Sink, Lengths, O, Max, LSE):
         with T.MixedKernel(min(nq, 32)) as (bx, sid):
-            q_rope_l1 = T.alloc_l1((q_slots, 64, 64), "bfloat16")
-            q_l1 = T.alloc_l1((q_slots, 64, 512), "bfloat16")
-            kv_l1_0 = T.alloc_l1((32, 512), "bfloat16")
-            kv_l1_1 = T.alloc_l1((32, 512), "bfloat16")
-            rope_l1_0 = T.alloc_l1((32, 64), "bfloat16")
-            rope_l1_1 = T.alloc_l1((32, 64), "bfloat16")
+            q_l1 = T.alloc_l1((q_slots, 64, 576), "bfloat16")
+            kv_l1_0 = T.alloc_l1((32, 576), "bfloat16")
+            kv_l1_1 = T.alloc_l1((32, 576), "bfloat16")
             s_l1 = T.alloc_l1((64, 64), "bfloat16")
             aq = T.alloc_l0a((64, 128), "bfloat16")
             bq = T.alloc_l0b((64, 128), "bfloat16")
@@ -223,8 +220,7 @@ def hy4_sparse_attention(nq, nk, topk=2048, *, scale, sink=True, variable_length
             # A BF16 SIMD load reads 128 elements, including at column 512.
             # Pad each gathered row so the RoPE load stays within its UB row.
             kv = T.alloc_shared((32, 640), "bfloat16")
-            nz_rope = T.alloc_shared((33, 64), "bfloat16")
-            nz = T.alloc_shared((33, 512), "bfloat16")
+            nz = T.alloc_shared((33, 576), "bfloat16")
             p = T.alloc_shared((32, 64), "float32")
             s = T.alloc_shared((32, 64), "bfloat16")
             accum = T.alloc_shared((32, 512), "float32")
@@ -246,21 +242,16 @@ def hy4_sparse_attention(nq, nk, topk=2048, *, scale, sink=True, variable_length
             ss = T.alloc_ss((2,), "uint32")
             ss_pairs = T.view(ss, shape=(1,), dtype="uint64")
             ss_result = T.alloc_ss((1,), "uint32")
-            # Preserve the four 128 KiB regions used by the latent pipeline.
-            # S occupies 16 KiB; two 16 KiB RoPE rings and Q follow it.
-            T.annotate_buffer_addresses(
-                {kv_l1_0: 0, q_l1: 131072, kv_l1_1: 262144, s_l1: 393216, rope_l1_0: 409600, rope_l1_1: 425984, q_rope_l1: 442368}
-            )
+            # One 576-wide transfer per AIV retains the original two KV
+            # channels. Each four-version KV ring now occupies 144 KiB;
+            # reserve 144 KiB for the largest (two-slot) Q allocation too.
+            T.annotate_buffer_addresses({kv_l1_0: 0, q_l1: 147456, kv_l1_1: 294912, s_l1: 442368})
             T.annotate_layout(
                 {
                     aq: make_ascend_major_k_layout(aq),
                     bq: make_ascend_major_k_layout(bq),
                     bv: make_ascend_major_mn_layout(bv),
                     q_l1: make_ascend_major_k_layout(q_l1),
-                    q_rope_l1: make_ascend_major_k_layout(q_rope_l1),
-                    rope_l1_0: make_ascend_major_k_layout(rope_l1_0),
-                    rope_l1_1: make_ascend_major_k_layout(rope_l1_1),
-                    nz_rope: make_ascend_compact_nz_layout(nz_rope),
                     kv_l1_0: make_ascend_major_k_layout(kv_l1_0),
                     kv_l1_1: make_ascend_major_k_layout(kv_l1_1),
                     s_l1: make_ascend_major_k_layout(s_l1),
@@ -270,15 +261,11 @@ def hy4_sparse_attention(nq, nk, topk=2048, *, scale, sink=True, variable_length
                 }
             )
             if q_prefetch:
-                T.annotate_manual_multi_buffer({q_l1: 2 * nb, q_rope_l1: 2 * nb})
+                T.annotate_manual_multi_buffer({q_l1: 2 * nb})
             T.annotate_manual_multi_buffer({accum: 4})
             T.annotate_buffer_versions(
                 {
                     q_l1: 1,
-                    q_rope_l1: 1,
-                    rope_l1_0: 4,
-                    rope_l1_1: 4,
-                    nz_rope: 1,
                     kv_l1_0: 4,
                     kv_l1_1: 4,
                     s_l1: 2,
@@ -322,8 +309,7 @@ def hy4_sparse_attention(nq, nk, topk=2048, *, scale, sink=True, variable_length
                 k = step % nb
                 qidx = bx + job * 32
                 if q_prefetch and k == 0:
-                    T.copy(Q[qidx, :, :512], q_l1[job % q_slots, :, :])
-                    T.copy(Q[qidx, :, 512:576], q_rope_l1[job % q_slots, :, :])
+                    T.copy(Q[qidx, :, :], q_l1[job % q_slots, :, :])
                 if not pipeline_stages:
                     load_metadata(
                         k,
@@ -352,8 +338,8 @@ def hy4_sparse_attention(nq, nk, topk=2048, *, scale, sink=True, variable_length
                     with T.SimdVF():
                         nd_mask = T.simd.pset(16)
                         src_ptr = T.simd.make_ubuf_ptr(T.access_ptr(kv[0, 0], "r", extent=20480), "bfloat16")
-                        dst0 = T.simd.make_ubuf_ptr(T.access_ptr(nz[0, 0], "w", extent=16896), "bfloat16")
-                        dst1 = T.simd.make_ubuf_ptr(T.access_ptr(nz[0, 128], "w", extent=12672), "bfloat16")
+                        dst0 = T.simd.make_ubuf_ptr(T.access_ptr(nz[0, 0], "w", extent=19008), "bfloat16")
+                        dst1 = T.simd.make_ubuf_ptr(T.access_ptr(nz[0, 128], "w", extent=14784), "bfloat16")
                         for _col in T.unroll(2, unroll_factor=1):
                             for row in T.unroll(32):
                                 x0, src_ptr = T.simd.vld(src_ptr, post_inc=128)
@@ -365,30 +351,32 @@ def hy4_sparse_attention(nq, nk, topk=2048, *, scale, sink=True, variable_length
                         rope_mask = T.simd.pset(16, "PAT_VL64")
                         for row in T.unroll(32):
                             rope = T.simd.vld(kv[row, 512])
-                            T.simd.vsstb(rope, nz_rope[row, 0], 33 << 16, rope_mask)
+                            T.simd.vsstb(rope, nz[row, 512], 33 << 16, rope_mask)
                     if sid == 0:
                         T.copy(nz[:32, :], kv_l1_0)
-                        T.copy(nz_rope[:32, :], rope_l1_0)
                     else:
                         T.copy(nz[:32, :], kv_l1_1)
-                        T.copy(nz_rope[:32, :], rope_l1_1)
                 with T.Stage(4 + q_lead_shift if pipeline_stages else 0):
                     if not q_prefetch and k == 0:
-                        T.copy(Q[qidx, :, :512], q_l1[0, :, :])
-                        T.copy(Q[qidx, :, 512:576], q_rope_l1[0, :, :])
+                        T.copy(Q[qidx, :, :], q_l1[0, :, :])
                     T.set_mmad_direction("m")
-                    for d in T.Pipelined(4, num_stages=4):
-                        T.copy(q_l1[job % q_slots, :, d * 128 : (d + 1) * 128], aq)
+                    # One QK loop keeps latent and RoPE under the same L1
+                    # ownership/sync channel. Its last sub-K tile is 64 wide.
+                    for d in T.Pipelined(5, num_stages=4):
+                        qk_width = T.min(128, 576 - d * 128)
+                        T.copy(q_l1[job % q_slots, :, d * 128 : d * 128 + qk_width], aq[:, :qk_width], l0_pitch=4)
                         with T.Task():
-                            T.copy(kv_l1_0[:, d * 128 : (d + 1) * 128], bq[:32, :], l0_pitch=4)
-                            T.copy(kv_l1_1[:, d * 128 : (d + 1) * 128], bq[32:, :], l0_pitch=4)
-                        T.gemm(aq, bq, cq, transpose_B=True, clear_accum=d == 0, unit_flag_ctrl=2)
-                    # Publish scores only after the additional RoPE dot product.
-                    T.copy(q_rope_l1[job % q_slots, :, :], aq[:, :64], l0_pitch=4)
-                    with T.Task():
-                        T.copy(rope_l1_0, bq[:32, :64], l0_pitch=4)
-                        T.copy(rope_l1_1, bq[32:, :64], l0_pitch=4)
-                    T.gemm(aq[:, :64], bq[:, :64], cq, transpose_B=True, clear_accum=False, unit_flag_ctrl=3)
+                            T.copy(kv_l1_0[:, d * 128 : d * 128 + qk_width], bq[:32, :qk_width], l0_pitch=4)
+                            T.copy(kv_l1_1[:, d * 128 : d * 128 + qk_width], bq[32:, :qk_width], l0_pitch=4)
+                        T.gemm(
+                            aq[:, :qk_width],
+                            bq[:, :qk_width],
+                            cq,
+                            transpose_B=True,
+                            clear_accum=d == 0,
+                            unit_flag_ctrl=T.if_then_else(d == 4, 3, 2),
+                        )
+                    # Publish scores only after the RoPE sub-K tile.
                     T.dual_copy(cq, p, unit_flag_ctrl=3)
                     if k == 0:
                         with T.SimdVF():

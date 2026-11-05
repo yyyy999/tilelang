@@ -113,14 +113,14 @@ Output[t,h,:] = sum_u(exp(score[t,h,u]) * KV[j,0:512])
 
 ### 首选适配方案
 
-1. 保持 latent512 的 QK/PV 主路径，新增64维 RoPE 的读取、缓冲和 QK 累加；PV仍只消费latent512。
+1. 保持 latent512 的 QK/PV 主路径，新增64维 RoPE 的读取和 QK 累加；PV仍只消费latent512。当前Q/KV L1和NZ各自合为576维存储，以减少独立同步通道。
 2. 扩展输入 view/stride，确保 gather 能取得512+64而不误将RoPE混入PV。
 3. 重新审视 UB ND→NZ packing、L1布局、`l0_pitch`、buffer版本和固定地址；用生成代码与容量检查确认合法性。
 4. QK最终完成点移到RoPE累加之后，调整最后一次GEMM的UnitFlag和FixPipe交接；不能在512维结束时提前发布score。
 5. 保留现有softmax/sink和四个128维PV输出块，复用其数值与流水测试结构。
 6. 在实际TopK2048下重新分析调度，再决定是否扩展query预取；不强行套用原TopK640的参数。
 
-具体资源约束：原来单个`32×512×BF16`的KV L1缓冲四版本占128 KiB，`32×576×BF16`四版本占144 KiB；当前代码在相邻128 KiB边界指定固定地址。因此不允许全局替换512→576后直接沿用地址表。独立RoPE缓冲是首选候选设计，其自身容量和生命周期仍需验证。
+具体资源约束：原来单个`32×512×BF16`的KV L1缓冲四版本占128 KiB，`32×576×BF16`四版本占144 KiB；不能全局替换512→576后直接沿用地址表。独立RoPE缓冲方案在首次离线lowering中遇到跨核flag分配限制；当前采用合并576维L1，重新布局固定地址。资源账本及检查状态见[STATIC_CHECKS.md](STATIC_CHECKS.md)。
 
 TopK2048对应32个64-token块；当前`q_prefetch`仅在4≤nb≤15启用，目标默认进入单query slot路径。它不是正确性问题，但原双query预取性能不能直接外推到目标。
 
