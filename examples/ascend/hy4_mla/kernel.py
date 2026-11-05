@@ -195,7 +195,9 @@ def hy4_sparse_attention(nq, nk, topk=2048, *, scale, sink=True, variable_length
                 hi = larger[sid * 16 + i]
             second = T.if_then_else(hi < valid_limit, hi, lo)
             n_burst = T.alloc_var("int32", init=T.if_then_else(lo < valid_limit, 2, 0))
-            safe_lo = T.if_then_else(n_burst == 0, T.uint32(0), lo)
+            # Widen the row index before multiplying by the 576-element
+            # stride; casting the product afterwards would retain uint32 wrap.
+            safe_lo = T.Cast("int64", T.if_then_else(n_burst == 0, T.uint32(0), lo))
             stride = T.alloc_var("int64", init=T.Cast("int64", second - lo))
             pairs = T.StridedTensor((nk, 2, 576), (576, stride * 576, 1), "bfloat16", data=KV.data)
             # Match FlashMLA's zero-burst workaround: no invalid GM read, and the
