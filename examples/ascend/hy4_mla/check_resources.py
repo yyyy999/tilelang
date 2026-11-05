@@ -39,7 +39,19 @@ def inspect(topk=2048, pipeline=True, source=None, *, source_text=None):
         raise ValueError("topk must be a positive multiple of 64")
     tree = ast.parse(source_text if source_text is not None else (source or HERE / "kernel.py").read_text(encoding="utf-8"))
     builder = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "hy4_sparse_attention")
-    env = {"nq": 65, "nk": 257, "topk": topk, "scale": 1 / 16, "sink": True, "variable_lengths": True, "pipeline_stages": pipeline}
+    env = {
+        "nq": 65,
+        "nk": 257,
+        "topk": topk,
+        "scale": 1 / 16,
+        "sink": True,
+        "variable_lengths": True,
+        "pipeline_stages": pipeline,
+        "q_strides": None,
+        "kv_stride": None,
+        "index_stride": None,
+        "out_strides": None,
+    }
     for stmt in builder.body:
         if isinstance(stmt, ast.Assign):
             env[stmt.targets[0].id] = evaluate(stmt.value, env)

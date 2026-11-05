@@ -41,7 +41,13 @@ def sparse_mla_reference(q, kv, indices, attn_sink, lengths=None, *, scale, sink
         lse[t] = torch.logsumexp(scores, dim=-1)
         # A zero-value sink column gives a stable denominator even if its
         # logit is much larger than all data logits. Duplicates retain weight.
-        logits = torch.cat((scores, attn_sink.float()[:, None]), dim=-1) if sink else scores
+        # FlashMLA defines a +inf sink as zero output, rather than softmax's
+        # undefined inf-inf case. -inf (including padded heads) is a no-op.
+        positive_inf_sink = torch.isposinf(attn_sink) if sink else None
+        safe_sink = attn_sink.float().masked_fill(positive_inf_sink, 0) if sink else None
+        logits = torch.cat((scores, safe_sink[:, None]), dim=-1) if sink else scores
         probabilities = logits.softmax(dim=-1)[:, : selected.numel()]
+        if sink:
+            probabilities = probabilities.masked_fill(positive_inf_sink[:, None], 0)
         output[t] = (probabilities @ focused[:, :512]).to(q.dtype)
     return output, maximum, lse

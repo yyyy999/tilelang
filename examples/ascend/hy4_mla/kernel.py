@@ -10,11 +10,28 @@ import tilelang.ascend.language as T
 from tilelang.layout import make_ascend_compact_nz_layout, make_ascend_l0c_layout, make_ascend_major_k_layout, make_ascend_major_mn_layout
 
 
-def hy4_sparse_attention(nq, nk, topk=2048, *, scale, sink=True, variable_lengths=False, pipeline_stages=True):
+def hy4_sparse_attention(
+    nq,
+    nk,
+    topk=2048,
+    *,
+    scale,
+    sink=True,
+    variable_lengths=False,
+    pipeline_stages=True,
+    q_strides=None,
+    kv_stride=None,
+    index_stride=None,
+    out_strides=None,
+):
     if nq <= 0 or nk <= 0 or topk <= 0 or topk % 64:
         raise ValueError("nq/nk must be positive; topk must be a positive multiple of 64")
     if not math.isfinite(scale) or scale <= 0:
         raise ValueError("scale must be positive and finite")
+    q_strides = (64 * 576, 576, 1) if q_strides is None else q_strides
+    kv_stride = 576 if kv_stride is None else kv_stride
+    index_stride = topk if index_stride is None else index_stride
+    out_strides = (64 * 512, 512, 1) if out_strides is None else out_strides
     valid_limit = nk
     nb0 = topk // 64
     nb = nb0
@@ -199,7 +216,7 @@ def hy4_sparse_attention(nq, nk, topk=2048, *, scale, sink=True, variable_length
             # stride; casting the product afterwards would retain uint32 wrap.
             safe_lo = T.Cast("int64", T.if_then_else(n_burst == 0, T.uint32(0), lo))
             stride = T.alloc_var("int64", init=T.Cast("int64", second - lo))
-            pairs = T.StridedTensor((nk, 2, 576), (576, stride * 576, 1), "bfloat16", data=KV.data)
+            pairs = T.StridedTensor((nk, 2, 576), (kv_stride, stride * kv_stride, 1), "bfloat16", data=KV.data)
             # Match FlashMLA's zero-burst workaround: no invalid GM read, and the
             # initialized UB row is retained. Keep the assumption local to DMA.
             for _ in T.Serial(1):
@@ -512,12 +529,12 @@ def hy4_sparse_attention(nq, nk, topk=2048, *, scale, sink=True, variable_length
 
     @T.prim_func
     def main(
-        Q: T.Tensor((nq, 64, 576), "bfloat16"),
-        KV: T.Tensor((nk, 576), "bfloat16"),
-        Indices: T.Tensor((nq, topk), "int32"),
+        Q: T.StridedTensor((nq, 64, 576), q_strides, "bfloat16"),
+        KV: T.StridedTensor((nk, 576), (kv_stride, 1), "bfloat16"),
+        Indices: T.StridedTensor((nq, topk), (index_stride, 1), "int32"),
         Sink: T.Tensor((64,), "float32"),
         Lengths: T.Tensor((nq,), "int32"),
-        O: T.Tensor((nq, 64, 512), "bfloat16"),
+        O: T.StridedTensor((nq, 64, 512), out_strides, "bfloat16"),
         Max: T.Tensor((nq, 64), "float32"),
         LSE: T.Tensor((nq, 64), "float32"),
     ):

@@ -4,6 +4,8 @@
 
 本文是实现前固定的目标基线，区分源码事实、实施选择和待确认项。BF16 核心已开始实现；编译、设备正确性与性能状态见 README 和后续验证记录，不由本文的目标描述推定。
 
+BF16模型调用接口的增量要求与适配状态见[ADAPTATION.md](ADAPTATION.md)，包括可选参数、输出工作区、head padding和有序pitch布局。
+
 ## 1. 目标与范围
 
 实现公开 **Hy4 preview** 使用的、带 attention sink 的 V3.2 式 sparse MLA 核心：**Dqk=576，Dv=512，模型 TopK=2048**。
@@ -77,7 +79,7 @@ builder 为 `hy4_sparse_attention`，编译入口为 `compile_bf16`。下列为�
 | Max | `[nq, 64]` | FP32 | 有效数据 logits 的最大值，不包括 sink |
 | LSE | `[nq, 64]` | FP32 | 有效数据 logits 的自然对数 logsumexp，不包括 sink |
 
-第一阶段先接受连续输入：Q stride为`(36864,576,1)`，KV为`(576,1)`，Indices为`(K,1)`。任意 stride 和外部框架 padding 作为后续适配项，不能未测试就声明支持。框架接口中的 KV/Indices 单例 head 维可通过无拷贝 view 去除。
+核心默认连续输入：Q stride为`(36864,576,1)`，KV为`(576,1)`，Indices为`(K,1)`。新增GM stride参数用于有序正pitch的框架工作区view；其设备路径尚待验证，不声明支持任意stride。框架KV/Indices的单例head维由适配层无拷贝去除，具体限制见[ADAPTATION.md](ADAPTATION.md)。
 
 preview 的默认 RoPE 配置下，模型 Attention scale 为 `1/sqrt(192+64)=1/16`。该值不因投影吸收变成576维而改成 `1/sqrt(576)`；接口以调用方传入的 scale 为准。
 
@@ -103,7 +105,7 @@ Output[t,h,:] = sum_u(exp(score[t,h,u]) * KV[j,0:512])
 - 因果 mask、请求隔离和逻辑到物理地址转换由上游负责。核心不按展平后的 `t` 追加 `index <= t` 条件。
 - 全无效行沿用当前 Ascend FlashMLA 接口约定：Output=0、Max=-inf、LSE=+inf。这是兼容性哨兵，不是数学 logsumexp 的通常定义。
 - 非空行的 Max/LSE 均不包含 sink，只有输出归一化分母包含 sink；避免下游重复应用 sink。
-- 第一阶段限定有限 Q/KV/Sink 数值、正的有限 scale；不承诺一般 NaN/Inf 输入传播行为。
+- 第一阶段限定有限Q/KV数值、正的有限scale；Sink接口包含-inf无影响、+inf输出零的兼容要求，设备行为待专项回归。不承诺一般NaN/Inf输入传播行为。
 
 ## 6. 与现有 Ascend MLA 的差异及改法
 
@@ -128,7 +130,7 @@ TopK2048对应32个64-token块；当前`q_prefetch`仅在4≤nb≤15启用，目
 
 - 当前packed Decode使用V4.1的528-byte FP8 / 288-byte FP4记录；不能作为Hy4的576维缓存格式直接沿用。
 - 量化Decode需要先固定目标框架cache ABI，再适配数据、scale和64维RoPE的gather/dequant。第一阶段不选择或发明生产cache格式。
-- H64是第一阶段实现范围，不代表所有部署每卡均有64 heads。TP后H8/H16等需单独泛化SIMD、Cube tiling及任务分配。
+- H64是核心实现范围，不代表所有部署每卡均有64 heads。适配层将TP后H8/H16等补至H64再裁回，专用小head的SIMD、Cube tiling与任务分配优化仍是后续工作。
 - 新MLA的4 GiB cache限制、物理slot索引约定等仅在采用其packed路径时继承；BF16接口以KV行索引合同为准。
 - 共享索引仅共享选择结果，各层KV数据仍独立；由框架维护其生命周期。
 
@@ -166,7 +168,7 @@ hy4_mla/
 
 先固定H64、BF16、K2048，以nq和nk扫描覆盖小query及prefill负载；真实生产shape待确认。每个测量case先通过精度校验，报告kernel-only延迟及基准环境，保留每次launch时长和L2策略。
 
-有效GEMM FLOPs按每个有效索引每head的`2×576 + 2×512 = 2176`计算；如果报告按padded K计算的指标，必须标明，与有效工作量分开。端到端时间另计投影、索引器、布局转换、cache写入和输出gate等成本。
+有效 GEMM FLOPs 按每个保留索引槽、每个 head 的 `2×576 + 2×512 = 2176` 计算。长度前缀之外、负索引和越界索引不进入分子；重复索引按多次乘积计入。Softmax、sink 和搬运只留在时间里。MFU = 该 FLOPs / (T × Cube BF16 峰值)。T 取预热后 kernel 事件时间的中位数，单位秒。950PR 的 Cube BF16 峰值是 32 AIC 为 432 TFLOPS、28 AIC 为 378 TFLOPS；不用 Cube+Vector 总算力。按完整 topk 槽计算的是 padded MFU，必须与有效 MFU 分开报告。端到端时间另计投影、索引器、布局转换、cache 写入和输出 gate 等成本。
 
 现有README的405/362 TFLOP/s属于Dqk=Dv512、特定V4.1 workload和Ascend950DT/CANN9.3.0的记录，不作为Hy4性能承诺。性能验收需同硬件、同dtype/cache、同shape、同计时边界的目标参照；绝对延迟和相对目标仍待确认。
 

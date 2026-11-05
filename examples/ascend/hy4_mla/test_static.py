@@ -4,6 +4,7 @@ import ast
 import unittest
 
 from examples.ascend.hy4_mla.check_resources import HERE, evaluate, inspect
+from examples.ascend.hy4_mla.mfu import count_valid_slots, cube_bf16_tflops, gemm_flops, mfu
 
 
 class ResourcePreflight(unittest.TestCase):
@@ -52,6 +53,24 @@ class ResourcePreflight(unittest.TestCase):
             widths.append(width)
         self.assertEqual(covered, list(range(576)))
         self.assertEqual(widths[-1], 64)
+
+
+class MfuAccounting(unittest.TestCase):
+    def test_dense_gemm_matches_two_mnk(self):
+        flops = 2 * 4096 * 4096 * 4096
+        self.assertAlmostEqual(mfu(flops, 1.0e-3, 432.0), flops / (1.0e-3 * 432.0e12))
+        self.assertAlmostEqual(mfu(flops, 1.0e-3, 432.0) * 100, 31.81457256, places=5)
+
+    def test_sparse_numerator_counts_retained_slots_only(self):
+        indices = [[0, -1, 3, 9], [4, 4, 1, 2]]
+        self.assertEqual(count_valid_slots(indices, nk=5, lengths=[4, 2]), 4)
+        self.assertEqual(gemm_flops(1), 64 * (2 * 576 + 2 * 512))
+        self.assertEqual(cube_bf16_tflops(28), 378.0)
+        self.assertAlmostEqual(mfu(gemm_flops(4), 2.0e-3, 432.0) * 2, mfu(gemm_flops(8), 2.0e-3, 432.0))
+
+    def test_unknown_aic_count_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "36 AIC"):
+            cube_bf16_tflops(36)
 
 
 if __name__ == "__main__":

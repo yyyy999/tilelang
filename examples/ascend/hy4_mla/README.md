@@ -18,6 +18,40 @@ filtering. Empty rows return zero output, -inf maximum and +inf LSE.
 Indices must already encode causal/sequence eligibility; there is no additional
 causal mask. No paged or quantized KV cache adapter is included yet.
 
+## BF16 call adapter
+
+[ADAPTATION.md](ADAPTATION.md) defines the model-call contract and validation status.
+The compatibility entry point is `interface.flash_mla_sparse_fwd`:
+
+```python
+from examples.ascend.hy4_mla.interface import flash_mla_sparse_fwd
+
+# q [N,H,576], kv [M,1,576], indices [N,1,K]; BF16 q/kv/out.
+output, maximum, lse = flash_mla_sparse_fwd(
+    q, kv, indices, sm_scale,
+    attn_sink=attn_sink, topk_length=topk_length, out=out,
+)
+```
+
+The wrapper selects sink/length specializations, flattens single-head views and
+pads H<64 queries/sinks. H64 writes directly to a supplied output, including
+supported positive-pitch workspace views. Small-head calls compute a temporary
+H64 output before copying the real heads to `out`. FP8 Decode is not included.
+The model/framework still needs to select this Ascend backend; adding an example
+entry point does not register it in vLLM or Transformers.
+
+CPU-only adapter checks use a mock executor, without loading TileLang native libraries:
+
+```bash
+python -m unittest examples.ascend.hy4_mla.test_interface -v
+```
+
+Device acceptance for the new adapter is a separate, not-yet-validated step:
+
+```bash
+python -m pytest examples/ascend/hy4_mla/test_interface_npu.py -x -q
+```
+
 ## Run
 
 Run the source-level resource and alias checks locally first (stdlib only):
@@ -63,6 +97,7 @@ device jobs can distort results. There is no Hy4 performance claim yet.
 | `test_reference.py` | Hand-computable CPU semantic tests |
 | `test_hy4_mla.py` | NPU correctness and persistent-query regressions |
 | `run.py` | Single-case verification and optional warm-cache timing |
+| `mfu.py` | FLOP and MFU formula; it takes a measured time and does not supply one |
 | `check_resources.py`, `test_static.py` | Local allocation/alias/address budget checks without TileLang/NPU |
 | `check_lowering.py` | Offline native lowering/source generation and final allocation capture |
 

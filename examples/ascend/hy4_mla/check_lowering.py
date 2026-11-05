@@ -14,6 +14,7 @@ def main():
     parser = argparse.ArgumentParser(__doc__)
     parser.add_argument("--topk", type=int, nargs="+", default=[64, 2048])
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--pitched", action="store_true", help="Also lower non-contiguous Q/KV/indices/out workspace views")
     args = parser.parse_args()
 
     # Import only after CLI handling; --help works in the stdlib-only setup.
@@ -44,18 +45,25 @@ def main():
                 if isinstance(func, tirx.PrimFunc):
                     tirx.stmt_functor.post_order_visit(func.body, visit)
 
-    for topk in args.topk:
-        print(f"LOWERING topk={topk}", flush=True)
+    cases = [(topk, pitched) for topk in args.topk for pitched in ((False, True) if args.pitched else (False,))]
+    for topk, pitched in cases:
+        label = f"topk{topk}" + ("_pitched" if pitched else "")
+        print(f"LOWERING {label}", flush=True)
         budget = inspect(topk)
         if not budget["fits"]:
             raise ValueError(f"Source allocation budget exceeded: {budget['pools']}")
         allocations.clear()
-        program = hy4_sparse_attention(65, 257, topk, scale=1 / 16, variable_lengths=True)
+        strides = (
+            {"q_strides": (128 * 600, 600, 1), "kv_stride": 600, "index_stride": topk + 16, "out_strides": (128 * 520, 520, 1)}
+            if pitched
+            else {}
+        )
+        program = hy4_sparse_attention(65, 257, topk, scale=1 / 16, variable_lengths=True, **strides)
         with tvm.transform.PassContext(instruments=[CaptureAllocations()]):
             artifact = tilelang.lower(program, target="ascend", enable_device_compile=False)
-        (args.output / f"topk{topk}.asc").write_text(artifact.kernel_source)
-        (args.output / f"topk{topk}.tir").write_text(artifact.device_mod.script())
-        record = {"topk": topk, "source_budget": budget["pools"], "lowered_allocations": list(allocations)}
+        (args.output / f"{label}.asc").write_text(artifact.kernel_source)
+        (args.output / f"{label}.tir").write_text(artifact.device_mod.script())
+        record = {"topk": topk, "pitched": pitched, "source_budget": budget["pools"], "lowered_allocations": list(allocations)}
         records.append(record)
         (args.output / "lowering.json").write_text(json.dumps(records, indent=2) + "\n")
         print(json.dumps(record, indent=2), flush=True)
