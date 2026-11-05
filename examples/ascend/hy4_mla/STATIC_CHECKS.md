@@ -90,7 +90,7 @@ QK合入同一五次迭代的流水循环，sub-K依次为128/128/128/128/64，
 统一consumer循环也避免为末尾RoPE额外引入一个L1消费同步区域。
 动态sub-K的copy/MAD合法性仍由离线lowering核实。
 该改法已重新通过本地预算与别名检查；
-跨核同步可分配性待新的离线lowering确认。
+跨核同步可分配性由下述离线lowering结果确认；设备执行行为仍未验证。
 
 合并方案的离线lowering已于提交`7275bca5`通过K2048和K64（nq65、nk257、长度启用）。
 已取回生成AscendC与TIR在本地审阅：
@@ -109,7 +109,10 @@ KV gather每行1152字节、UB行距1280字节；UB→L1一次传36个C0块。
 这些只是生成代码事实，未证明设备DMA和同步实际运行正确。
 
 本地审阅生成代码另发现：uint32行索引乘576可能在转换为int64之前溢出。
-已将`safe_lo`在进入StridedTensor索引前显式提升为int64；该末项修正需后续lowering复核。
+已将`safe_lo`在进入StridedTensor索引前显式提升为int64。
+最终代码提交`dd476907`再次通过K2048和K64离线lowering，生成GM源地址为
+`pairs[safe_lo_aiv0 * (int64_t)576]`（AIV1同样），确认乘法在64位进行。
+最终离线产物位于A5的`/tmp/hy4-lowering-dd476907/`，未进行设备二进制编译、launch或性能测量。
 
 已有执行记录：初稿CPU reference的7项测试通过；第一次NPU测试请求实际停在
 `T.view`前端构建错误，没有kernel launch。此后已停止反复进行设备测试。
