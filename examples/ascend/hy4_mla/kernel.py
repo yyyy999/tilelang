@@ -219,10 +219,16 @@ def hy4_sparse_attention(
             pairs = T.StridedTensor((nk, 2, 576), (kv_stride, stride * kv_stride, 1), "bfloat16", data=KV.data)
             # Match FlashMLA's zero-burst workaround: no invalid GM read, and the
             # initialized UB row is retained. Keep the assumption local to DMA.
+            # normal_lv retains the 576-wide KV line in L2. The target
+            # nq=nk=4096, topk=2048 workload reuses 4.7 MB of KV across queries.
             for _ in T.Serial(1):
                 T.assume(n_burst > 0)
                 T.assume(n_burst == 0 or safe_lo < pairs.shape[0])
-                T.copy(pairs[safe_lo, :n_burst, :], kv[i * 2 : i * 2 + n_burst, :576])
+                T.copy(
+                    pairs[safe_lo, :n_burst, :],
+                    kv[i * 2 : i * 2 + n_burst, :576],
+                    l2_cache_ctrl="normal_lv",
+                )
 
     @T.macro
     def attention_body(Q, KV, Indices, Sink, Lengths, O, Max, LSE):
