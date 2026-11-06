@@ -10,6 +10,7 @@ def compile_bf16(
     sink=True,
     variable_lengths=False,
     pipeline_stages=True,
+    num_cores=None,
     q_strides=None,
     kv_stride=None,
     index_stride=None,
@@ -27,6 +28,13 @@ def compile_bf16(
 
     from examples.ascend.hy4_mla.kernel import hy4_sparse_attention
 
+    if num_cores is None:
+        import torch
+
+        from tilelang.carver.arch.driver.ascend_driver import get_num_cube_cores
+
+        num_cores = int(get_num_cube_cores(torch.npu.current_device()))
+
     return tilelang.compile(
         hy4_sparse_attention(
             nq,
@@ -36,6 +44,7 @@ def compile_bf16(
             sink=sink,
             variable_lengths=variable_lengths,
             pipeline_stages=pipeline_stages,
+            num_cores=num_cores,
             q_strides=q_strides,
             kv_stride=kv_stride,
             index_stride=index_stride,

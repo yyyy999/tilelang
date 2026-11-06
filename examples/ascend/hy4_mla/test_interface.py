@@ -166,6 +166,7 @@ class CompilationBindingTests(unittest.TestCase):
                 4,
                 64,
                 scale=1 / 16,
+                num_cores=28,
                 variable_lengths=True,
                 explicit_outputs=True,
                 q_strides=(40000, 600, 1),
@@ -176,8 +177,9 @@ class CompilationBindingTests(unittest.TestCase):
             self.assertEqual(result, "compiled")
             self.assertEqual(fake_tilelang.compile.call_args.kwargs["out_idx"], [])
             self.assertEqual(fake_kernel.hy4_sparse_attention.call_args.kwargs["kv_stride"], 600)
+            self.assertEqual(fake_kernel.hy4_sparse_attention.call_args.kwargs["num_cores"], 28)
             self.assertEqual(fake_kernel.hy4_sparse_attention.call_args.kwargs["out_strides"], (70000, 520, 1))
-            compile_bf16(3, 4, 64, scale=1 / 16)
+            compile_bf16(3, 4, 64, scale=1 / 16, num_cores=28)
             self.assertEqual(fake_tilelang.compile.call_args.kwargs["out_idx"], [5, 6, 7])
 
     def test_strided_automatic_outputs_are_rejected(self):

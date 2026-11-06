@@ -48,11 +48,11 @@ def count_valid_slots(indices, nk, lengths):
     return total
 
 
-def gemm_flops(slots):
+def gemm_flops(slots, *, dqk=QK_K):
     """FLOPs for ``slots`` retained scores across all heads."""
     if slots < 0:
         raise ValueError("slots must be non-negative")
-    return slots * HEADS * FLOPS_PER_SLOT
+    return slots * HEADS * (2 * dqk + 2 * PV_K)
 
 
 def mfu(flops, seconds, peak_tflops):

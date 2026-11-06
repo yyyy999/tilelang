@@ -19,11 +19,15 @@ def hy4_sparse_attention(
     sink=True,
     variable_lengths=False,
     pipeline_stages=True,
+    num_cores=32,
     q_strides=None,
     kv_stride=None,
     index_stride=None,
     out_strides=None,
 ):
+    if num_cores <= 0:
+        raise ValueError("num_cores must be positive")
+    launch_cores = min(nq, num_cores)
     if nq <= 0 or nk <= 0 or topk <= 0 or topk % 64:
         raise ValueError("nq/nk must be positive; topk must be a positive multiple of 64")
     if not math.isfinite(scale) or scale <= 0:
@@ -232,7 +236,7 @@ def hy4_sparse_attention(
 
     @T.macro
     def attention_body(Q, KV, Indices, Sink, Lengths, O, Max, LSE):
-        with T.MixedKernel(min(nq, 32)) as (bx, sid):
+        with T.MixedKernel(launch_cores) as (bx, sid):
             q_l1 = T.alloc_l1((q_slots, 64, 576), "bfloat16")
             kv_l1_0 = T.alloc_l1((32, 576), "bfloat16")
             kv_l1_1 = T.alloc_l1((32, 576), "bfloat16")
@@ -329,10 +333,12 @@ def hy4_sparse_attention(
             with T.SimdVF():
                 T.fill(kv, 0)
             emitted = T.alloc_var("int32", init=0)
-            for step in T.Pipelined(T.ceildiv(nq - bx, 32) * nb, num_stages=6 + q_lead_shift, annotations={"enable_offset": True}):
+            for step in T.Pipelined(
+                T.ceildiv(nq - bx, launch_cores) * nb, num_stages=6 + q_lead_shift, annotations={"enable_offset": True}
+            ):
                 job = step // nb
                 k = step % nb
-                qidx = bx + job * 32
+                qidx = bx + job * launch_cores
                 if q_prefetch and k == 0:
                     T.copy(Q[qidx, :, :], q_l1[job % q_slots, :, :])
                 if not pipeline_stages:

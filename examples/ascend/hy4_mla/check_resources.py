@@ -47,6 +47,7 @@ def inspect(topk=2048, pipeline=True, source=None, *, source_text=None):
         "sink": True,
         "variable_lengths": True,
         "pipeline_stages": pipeline,
+        "num_cores": 32,
         "q_strides": None,
         "kv_stride": None,
         "index_stride": None,
