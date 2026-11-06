@@ -25,7 +25,7 @@ SCOPES = {
     "alloc_l0c": ("L0C", 1024, "kAscendL0CMemoryBytes"),
     "alloc_ss": ("SS", 32, "kAscendSSMemoryBytes"),
 }
-DTYPE_BITS = {"bfloat16": 16, "float32": 32, "int32": 32, "uint32": 32, "uint64": 64}
+DTYPE_BITS = {"uint8": 8, "bfloat16": 16, "float32": 32, "int32": 32, "uint32": 32, "uint64": 64}
 
 
 def evaluate(node, env):
@@ -34,7 +34,7 @@ def evaluate(node, env):
     return eval(compile(ast.Expression(node), "<kernel allocation>", "eval"), {"__builtins__": {}, "min": min}, env)  # noqa: S307
 
 
-def inspect(topk=2048, pipeline=True, source=None, *, source_text=None):
+def inspect(topk=2048, pipeline=True, source=None, *, source_text=None, kv_format="bf16"):
     if topk <= 0 or topk % 64:
         raise ValueError("topk must be a positive multiple of 64")
     tree = ast.parse(source_text if source_text is not None else (source or HERE / "kernel.py").read_text(encoding="utf-8"))
@@ -50,6 +50,7 @@ def inspect(topk=2048, pipeline=True, source=None, *, source_text=None):
         "num_cores": 32,
         "q_strides": None,
         "kv_stride": None,
+        "kv_format": kv_format,
         "index_stride": None,
         "out_strides": None,
     }
@@ -144,9 +145,10 @@ def main():
     parser.add_argument("--source", type=Path)
     parser.add_argument("--topk", type=int, default=2048)
     parser.add_argument("--no-pipeline", action="store_true")
+    parser.add_argument("--kv-format", choices=["bf16", "fp8_ds_mla"], default="bf16")
     parser.add_argument("--details", action="store_true")
     args = parser.parse_args()
-    result = inspect(args.topk, not args.no_pipeline, args.source)
+    result = inspect(args.topk, not args.no_pipeline, args.source, kv_format=args.kv_format)
     if not args.details:
         result.pop("buffers")
     print(json.dumps(result, indent=2))

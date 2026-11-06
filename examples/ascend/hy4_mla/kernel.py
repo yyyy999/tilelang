@@ -1,4 +1,4 @@
-"""Hy4 preview BF16 sparse MLA (QK576 -> V512).
+"""Hy4 preview sparse MLA (QK576 -> V512).
 
 Adapted from examples/ascend/flashmla/kernel.py and its FlashMLA scheduling
 algorithm. See LICENSE for the retained DeepSeek MIT notice.
@@ -8,6 +8,9 @@ import math
 
 import tilelang.ascend.language as T
 from tilelang.layout import make_ascend_compact_nz_layout, make_ascend_l0c_layout, make_ascend_major_k_layout, make_ascend_major_mn_layout
+
+
+from examples.ascend.hy4_mla.quantization import unpack_fp8_tile
 
 
 def hy4_sparse_attention(
@@ -24,6 +27,7 @@ def hy4_sparse_attention(
     kv_stride=None,
     index_stride=None,
     out_strides=None,
+    kv_format="bf16",
 ):
     if num_cores <= 0:
         raise ValueError("num_cores must be positive")
@@ -33,7 +37,13 @@ def hy4_sparse_attention(
     if not math.isfinite(scale) or scale <= 0:
         raise ValueError("scale must be positive and finite")
     q_strides = (64 * 576, 576, 1) if q_strides is None else q_strides
-    kv_stride = 576 if kv_stride is None else kv_stride
+    if kv_format not in ("bf16", "fp8_ds_mla"):
+        raise ValueError("Unsupported KV format")
+    packed = kv_format == "fp8_ds_mla"
+    kv_width = 656 if packed else 576
+    kv_ub_width = 672 if packed else 640
+    kv_dtype = "uint8" if packed else "bfloat16"
+    kv_stride = kv_width if kv_stride is None else kv_stride
     index_stride = topk if index_stride is None else index_stride
     out_strides = (64 * 512, 512, 1) if out_strides is None else out_strides
     valid_limit = nk
@@ -216,21 +226,20 @@ def hy4_sparse_attention(
                 hi = larger[sid * 16 + i]
             second = T.if_then_else(hi < valid_limit, hi, lo)
             n_burst = T.alloc_var("int32", init=T.if_then_else(lo < valid_limit, 2, 0))
-            # Widen the row index before multiplying by the 576-element
+            # Widen the row index before multiplying by the physical row
             # stride; casting the product afterwards would retain uint32 wrap.
             safe_lo = T.Cast("int64", T.if_then_else(n_burst == 0, T.uint32(0), lo))
             stride = T.alloc_var("int64", init=T.Cast("int64", second - lo))
-            pairs = T.StridedTensor((nk, 2, 576), (kv_stride, stride * kv_stride, 1), "bfloat16", data=KV.data)
+            pairs = T.StridedTensor((nk, 2, kv_width), (kv_stride, stride * kv_stride, 1), kv_dtype, data=KV.data)
             # Match FlashMLA's zero-burst workaround: no invalid GM read, and the
             # initialized UB row is retained. Keep the assumption local to DMA.
-            # normal_lv retains the 576-wide KV line in L2. The target
-            # nq=nk=4096, topk=2048 workload reuses 4.7 MB of KV across queries.
+            # Retain gathered KV lines in L2 for reuse across queries.
             for _ in T.Serial(1):
                 T.assume(n_burst > 0)
                 T.assume(n_burst == 0 or safe_lo < pairs.shape[0])
                 T.copy(
                     pairs[safe_lo, :n_burst, :],
-                    kv[i * 2 : i * 2 + n_burst, :576],
+                    kv[i * 2 : i * 2 + n_burst, :kv_width],
                     l2_cache_ctrl="normal_lv",
                 )
 
@@ -248,7 +257,7 @@ def hy4_sparse_attention(
             cpv = T.alloc_l0c((4, 64, 128), "float32")
             # A BF16 SIMD load reads 128 elements, including at column 512.
             # Pad each gathered row so the RoPE load stays within its UB row.
-            kv = T.alloc_shared((32, 640), "bfloat16")
+            kv = T.alloc_shared((32, kv_ub_width), kv_dtype)
             nz = T.alloc_shared((33, 576), "bfloat16")
             p = T.alloc_shared((32, 64), "float32")
             s = T.alloc_shared((32, 64), "bfloat16")
@@ -366,23 +375,26 @@ def hy4_sparse_attention(
                         kv,
                     )
                 with T.Stage(2 + q_lead_shift if pipeline_stages else 0):
-                    with T.SimdVF():
-                        nd_mask = T.simd.pset(16)
-                        src_ptr = T.simd.make_ubuf_ptr(T.access_ptr(kv[0, 0], "r", extent=20480), "bfloat16")
-                        dst0 = T.simd.make_ubuf_ptr(T.access_ptr(nz[0, 0], "w", extent=19008), "bfloat16")
-                        dst1 = T.simd.make_ubuf_ptr(T.access_ptr(nz[0, 128], "w", extent=14784), "bfloat16")
-                        for _col in T.unroll(2, unroll_factor=1):
+                    if packed:
+                        unpack_fp8_tile(kv, nz)
+                    else:
+                        with T.SimdVF():
+                            nd_mask = T.simd.pset(16)
+                            src_ptr = T.simd.make_ubuf_ptr(T.access_ptr(kv[0, 0], "r", extent=20480), "bfloat16")
+                            dst0 = T.simd.make_ubuf_ptr(T.access_ptr(nz[0, 0], "w", extent=19008), "bfloat16")
+                            dst1 = T.simd.make_ubuf_ptr(T.access_ptr(nz[0, 128], "w", extent=14784), "bfloat16")
+                            for _col in T.unroll(2, unroll_factor=1):
+                                for row in T.unroll(32):
+                                    x0, src_ptr = T.simd.vld(src_ptr, post_inc=128)
+                                    x1, src_ptr = T.simd.vld(src_ptr, post_inc=T.if_then_else(row == 31, -19712, 512))
+                                    config = 33 << 16 | T.if_then_else(row == 31, 497, 1)
+                                    dst0 = T.simd.vsstb(x0, dst0, config, nd_mask, update=True)
+                                    dst1 = T.simd.vsstb(x1, dst1, config, nd_mask, update=True)
+                        with T.SimdVF():
+                            rope_mask = T.simd.pset(16, "PAT_VL64")
                             for row in T.unroll(32):
-                                x0, src_ptr = T.simd.vld(src_ptr, post_inc=128)
-                                x1, src_ptr = T.simd.vld(src_ptr, post_inc=T.if_then_else(row == 31, -19712, 512))
-                                config = 33 << 16 | T.if_then_else(row == 31, 497, 1)
-                                dst0 = T.simd.vsstb(x0, dst0, config, nd_mask, update=True)
-                                dst1 = T.simd.vsstb(x1, dst1, config, nd_mask, update=True)
-                    with T.SimdVF():
-                        rope_mask = T.simd.pset(16, "PAT_VL64")
-                        for row in T.unroll(32):
-                            rope = T.simd.vld(kv[row, 512])
-                            T.simd.vsstb(rope, nz[row, 512], 33 << 16, rope_mask)
+                                rope = T.simd.vld(kv[row, 512])
+                                T.simd.vsstb(rope, nz[row, 512], 33 << 16, rope_mask)
                     if sid == 0:
                         T.copy(nz[:32, :], kv_l1_0)
                     else:
@@ -468,7 +480,8 @@ def hy4_sparse_attention(
                             T.simd.vsts(denorm[0], T.simd.vsel(T.simd.vdup(0.0, "float32"), reciprocal, invalid))
                             T.simd.vsts(maxima[0], T.simd.vsel(T.simd.vdup(float("-inf"), "float32"), maximum, invalid))
                             T.simd.vsts(sums[0], T.simd.vsel(T.simd.vdup(float("inf"), "float32"), logsum, invalid))
-                        T.copy(maxima[:32], Max[qidx, sid * 32 : sid * 32 + 32])
+                        if not packed:
+                            T.copy(maxima[:32], Max[qidx, sid * 32 : sid * 32 + 32])
                         T.copy(sums[:32], LSE[qidx, sid * 32 : sid * 32 + 32])
                 if pipeline_stages:
                     with T.Stage(q_lead_shift - (1 if extra_metadata_lead else 0)):
@@ -538,6 +551,21 @@ def hy4_sparse_attention(
                         )
                     with T.Stage(4 + q_lead_shift):
                         ss[sid] = T.Cast("uint32", delta[0] > 6.0 / scale)
+
+    if packed:
+        @T.prim_func
+        def decode_main(
+            Q: T.StridedTensor((nq, 64, 576), q_strides, "bfloat16"),
+            KV: T.StridedTensor((nk, kv_width), (kv_stride, 1), kv_dtype),
+            Indices: T.StridedTensor((nq, topk), (index_stride, 1), "int32"),
+            Sink: T.Tensor((64,), "float32"),
+            Lengths: T.Tensor((nq,), "int32"),
+            O: T.StridedTensor((nq, 64, 512), out_strides, "bfloat16"),
+            LSE: T.Tensor((nq, 64), "float32"),
+        ):
+            attention_body(Q, KV, Indices, Sink, Lengths, O, None, LSE)
+
+        return decode_main
 
     @T.prim_func
     def main(

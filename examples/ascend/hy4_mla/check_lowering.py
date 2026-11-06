@@ -15,7 +15,10 @@ def main():
     parser.add_argument("--topk", type=int, nargs="+", default=[64, 2048])
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--pitched", action="store_true", help="Also lower non-contiguous Q/KV/indices/out workspace views")
+    parser.add_argument("--kv-format", choices=["bf16", "fp8_ds_mla"], default="bf16")
     args = parser.parse_args()
+    if args.pitched and args.kv_format != "bf16":
+        parser.error("--pitched is only supported for BF16")
 
     # Import only after CLI handling; --help works in the stdlib-only setup.
     import tilelang
@@ -47,9 +50,9 @@ def main():
 
     cases = [(topk, pitched) for topk in args.topk for pitched in ((False, True) if args.pitched else (False,))]
     for topk, pitched in cases:
-        label = f"topk{topk}" + ("_pitched" if pitched else "")
+        label = f"topk{topk}" + ("_fp8" if args.kv_format == "fp8_ds_mla" else "") + ("_pitched" if pitched else "")
         print(f"LOWERING {label}", flush=True)
-        budget = inspect(topk)
+        budget = inspect(topk, kv_format=args.kv_format)
         if not budget["fits"]:
             raise ValueError(f"Source allocation budget exceeded: {budget['pools']}")
         allocations.clear()
@@ -58,7 +61,10 @@ def main():
             if pitched
             else {}
         )
-        program = hy4_sparse_attention(65, 257, topk, scale=1 / 16, variable_lengths=True, **strides)
+        packed = args.kv_format == "fp8_ds_mla"
+        program = hy4_sparse_attention(
+            65, 256 if packed else 257, topk, scale=1 / 16, variable_lengths=not packed, kv_format=args.kv_format, **strides
+        )
         with tvm.transform.PassContext(instruments=[CaptureAllocations()]):
             artifact = tilelang.lower(program, target="ascend", enable_device_compile=False)
         (args.output / f"{label}.asc").write_text(artifact.kernel_source)
