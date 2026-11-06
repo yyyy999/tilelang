@@ -53,11 +53,6 @@ def hy4_sparse_attention(
     q_slots = 2 if q_prefetch else 1
     q_lead_shift = nb - 4 if q_prefetch else 0
     extra_metadata_lead = q_lead_shift > 0
-    # QK stays at stage 4. Softmax moves to stage 5, the same phase as the
-    # next tile's QK, so Cube can issue that QK while softmax publishes P.
-    # PV stays at stage 5 and still follows softmax in source order. This is
-    # only the long BF16 pipeline: other shapes keep the combined stage.
-    lead_qk = not packed and pipeline_stages and topk == 2048
     # Four complete groups avoid processing unused tiles in the last group.
     index_group = 512 if not packed and pipeline_stages and topk == 2048 else min(640, topk)
     direct_query_masks = pipeline_stages and 5 <= nb0 <= 10
@@ -250,93 +245,6 @@ def hy4_sparse_attention(
                 )
 
     @T.macro
-    def consume_scores(
-        k,
-        job,
-        qidx,
-        sid,
-        group_smaller,
-        group_larger,
-        smaller,
-        larger,
-        p,
-        s,
-        maxima,
-        sums,
-        scaling_max,
-        factors,
-        delta,
-        denorm,
-        s_l1,
-        ss,
-        attn_sink,
-        Max,
-        LSE,
-    ):
-        if k == 0:
-            with T.SimdVF():
-                T.fill(maxima, -3.4028234663852886e38)
-                T.fill(scaling_max, 0.0)
-                T.fill(sums, 0.0)
-        delta[0] = T.float32(0)
-        if k == 0:
-            if direct_query_masks:
-                softmax_vf(
-                    True,
-                    group_smaller,
-                    group_larger,
-                    p,
-                    s,
-                    maxima,
-                    sums,
-                    scaling_max,
-                    factors,
-                    delta,
-                    job % 2 * query_mask_stride + k * 32,
-                )
-            else:
-                softmax_vf(True, smaller, larger, p, s, maxima, sums, scaling_max, factors, delta)
-        elif direct_query_masks:
-            softmax_vf(
-                False,
-                group_smaller,
-                group_larger,
-                p,
-                s,
-                maxima,
-                sums,
-                scaling_max,
-                factors,
-                delta,
-                job % 2 * query_mask_stride + k * 32,
-            )
-        else:
-            softmax_vf(False, smaller, larger, p, s, maxima, sums, scaling_max, factors, delta)
-        T.copy(s[:32, :], s_l1[sid * 32 : sid * 32 + 32, :])
-        if not pipeline_stages:
-            ss[sid] = T.Cast("uint32", delta[0] > 6.0 / scale)
-        if k == nb - 1:
-            with T.SimdVF():
-                rmax, unused = T.simd.vdintlv(T.simd.vld(maxima[0]), T.simd.vld(maxima[0]))
-                smax, unused1 = T.simd.vdintlv(T.simd.vld(scaling_max[0]), T.simd.vld(scaling_max[0]))
-                rsum, unused2 = T.simd.vdintlv(T.simd.vld(sums[0]), T.simd.vld(sums[0]))
-                invalid = T.simd.vcmps(rmax, -3.4028234663852886e38, op="eq")
-                maximum = T.simd.vmuls(rmax, scale)
-                scaling = T.simd.vmuls(smax, scale)
-                logsum = T.simd.vadd(T.simd.vln(rsum), scaling)
-                denom = T.alloc_var("float32x64", init=rsum)
-                if sink:
-                    sinkprob = T.simd.vexpdif(T.simd.vld(attn_sink[0]), scaling)
-                    denom = T.simd.vadd(denom, sinkprob)
-                reciprocal = T.simd.vdiv(T.simd.vdup(1.0, "float32"), denom)
-                T.simd.vsts(denorm[0], T.simd.vsel(T.simd.vdup(0.0, "float32"), reciprocal, invalid))
-                T.simd.vsts(maxima[0], T.simd.vsel(T.simd.vdup(float("-inf"), "float32"), maximum, invalid))
-                T.simd.vsts(sums[0], T.simd.vsel(T.simd.vdup(float("inf"), "float32"), logsum, invalid))
-            if not packed:
-                T.copy(maxima[:32], Max[qidx, sid * 32 : sid * 32 + 32])
-            T.copy(sums[:32], LSE[qidx, sid * 32 : sid * 32 + 32])
-
-    @T.macro
     def attention_body(Q, KV, Indices, Sink, Lengths, O, Max, LSE):
         with T.MixedKernel(launch_cores) as (bx, sid):
             q_l1 = T.alloc_l1((q_slots, 64, 576), "bfloat16")
@@ -408,7 +316,7 @@ def hy4_sparse_attention(
                     # the next producer while retaining DMA/packing overlap.
                     kv: 2,
                     nz: 1,
-                    p: 2 if lead_qk else 1,
+                    p: 1,
                     s: 1,
                     accum: 1,
                     out: 2,
@@ -514,16 +422,37 @@ def hy4_sparse_attention(
                         )
                     # Publish scores only after the RoPE sub-K tile.
                     T.dual_copy(cq, p, unit_flag_ctrl=3)
-                    if not lead_qk:
-                        consume_scores(
-                            k,
-                            job,
-                            qidx,
-                            sid,
+                    # Switch Cube to N while softmax runs, so the direction
+                    # drain is not exposed between softmax and PV.
+                    T.set_mmad_direction("n")
+                    if k == 0:
+                        with T.SimdVF():
+                            T.fill(maxima, -3.4028234663852886e38)
+                            T.fill(scaling_max, 0.0)
+                            T.fill(sums, 0.0)
+                    delta[0] = T.float32(0)
+                    if k == 0:
+                        if direct_query_masks:
+                            softmax_vf(
+                                True,
+                                group_smaller,
+                                group_larger,
+                                p,
+                                s,
+                                maxima,
+                                sums,
+                                scaling_max,
+                                factors,
+                                delta,
+                                job % 2 * query_mask_stride + k * 32,
+                            )
+                        else:
+                            softmax_vf(True, smaller, larger, p, s, maxima, sums, scaling_max, factors, delta)
+                    elif direct_query_masks:
+                        softmax_vf(
+                            False,
                             group_smaller,
                             group_larger,
-                            None if direct_query_masks else smaller,
-                            None if direct_query_masks else larger,
                             p,
                             s,
                             maxima,
@@ -531,13 +460,33 @@ def hy4_sparse_attention(
                             scaling_max,
                             factors,
                             delta,
-                            denorm,
-                            s_l1,
-                            ss,
-                            attn_sink,
-                            Max,
-                            LSE,
+                            job % 2 * query_mask_stride + k * 32,
                         )
+                    else:
+                        softmax_vf(False, smaller, larger, p, s, maxima, sums, scaling_max, factors, delta)
+                    T.copy(s[:32, :], s_l1[sid * 32 : sid * 32 + 32, :])
+                    if not pipeline_stages:
+                        ss[sid] = T.Cast("uint32", delta[0] > 6.0 / scale)
+                    if k == nb - 1:
+                        with T.SimdVF():
+                            rmax, unused = T.simd.vdintlv(T.simd.vld(maxima[0]), T.simd.vld(maxima[0]))
+                            smax, unused1 = T.simd.vdintlv(T.simd.vld(scaling_max[0]), T.simd.vld(scaling_max[0]))
+                            rsum, unused2 = T.simd.vdintlv(T.simd.vld(sums[0]), T.simd.vld(sums[0]))
+                            invalid = T.simd.vcmps(rmax, -3.4028234663852886e38, op="eq")
+                            maximum = T.simd.vmuls(rmax, scale)
+                            scaling = T.simd.vmuls(smax, scale)
+                            logsum = T.simd.vadd(T.simd.vln(rsum), scaling)
+                            denom = T.alloc_var("float32x64", init=rsum)
+                            if sink:
+                                sinkprob = T.simd.vexpdif(T.simd.vld(attn_sink[0]), scaling)
+                                denom = T.simd.vadd(denom, sinkprob)
+                            reciprocal = T.simd.vdiv(T.simd.vdup(1.0, "float32"), denom)
+                            T.simd.vsts(denorm[0], T.simd.vsel(T.simd.vdup(0.0, "float32"), reciprocal, invalid))
+                            T.simd.vsts(maxima[0], T.simd.vsel(T.simd.vdup(float("-inf"), "float32"), maximum, invalid))
+                            T.simd.vsts(sums[0], T.simd.vsel(T.simd.vdup(float("inf"), "float32"), logsum, invalid))
+                        if not packed:
+                            T.copy(maxima[:32], Max[qidx, sid * 32 : sid * 32 + 32])
+                        T.copy(sums[:32], LSE[qidx, sid * 32 : sid * 32 + 32])
                 if pipeline_stages:
                     with T.Stage(q_lead_shift - (1 if extra_metadata_lead else 0)):
                         load_metadata(
@@ -552,36 +501,9 @@ def hy4_sparse_attention(
                             None if direct_query_masks else smaller,
                             None if direct_query_masks else larger,
                         )
-                if lead_qk:
-                    with T.Stage(5):
-                        consume_scores(
-                            k,
-                            job,
-                            qidx,
-                            sid,
-                            group_smaller,
-                            group_larger,
-                            None if direct_query_masks else smaller,
-                            None if direct_query_masks else larger,
-                            p,
-                            s,
-                            maxima,
-                            sums,
-                            scaling_max,
-                            factors,
-                            delta,
-                            denorm,
-                            s_l1,
-                            ss,
-                            attn_sink,
-                            Max,
-                            LSE,
-                        )
-                        ss[sid] = T.Cast("uint32", delta[0] > 6.0 / scale)
                 with T.Stage(5 + q_lead_shift if pipeline_stages else 0):
                     if k == 0:
                         emitted = 0
-                    T.set_mmad_direction("n")
                     last_output = k == nb - 1
                     if nb == 2:
                         pv_flag = T.alloc_var("int32", init=T.if_then_else(k == nb - 1, 3, 2))
@@ -630,9 +552,8 @@ def hy4_sparse_attention(
                             None if direct_query_masks else larger,
                             kv,
                         )
-                    if not lead_qk:
-                        with T.Stage(4 + q_lead_shift):
-                            ss[sid] = T.Cast("uint32", delta[0] > 6.0 / scale)
+                    with T.Stage(4 + q_lead_shift):
+                        ss[sid] = T.Cast("uint32", delta[0] > 6.0 / scale)
 
     if packed:
         @T.prim_func
