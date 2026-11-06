@@ -302,7 +302,14 @@ def hy4_sparse_attention(
                 }
             )
             if q_prefetch:
-                T.annotate_manual_multi_buffer({q_l1: 2 * nb})
+                # The annotation is the cross-iteration distance the dependence
+                # analysis is willing to search, and every unproved distance
+                # falls through to Z3. A full lead reuses a Q slot inside that
+                # window, so it must search 2*nb. Lead 0 reuses a slot nb+1
+                # iterations later, outside this 6-stage pipe; searching only
+                # the pipe window still covers every pair that can be in flight.
+                q_reuse_span = 2 * nb if q_lead_shift else 8
+                T.annotate_manual_multi_buffer({q_l1: q_reuse_span})
             T.annotate_manual_multi_buffer({accum: 4})
             T.annotate_buffer_versions(
                 {
