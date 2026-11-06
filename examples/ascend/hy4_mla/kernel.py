@@ -51,10 +51,9 @@ def hy4_sparse_attention(
     nb = nb0
     q_prefetch = pipeline_stages and (4 <= nb <= 15 or (not packed and topk == 2048))
     q_slots = 2 if q_prefetch else 1
-    # Short sequences shift every stage. TopK 2048 keeps that map and only
-    # issues the next query's Q two tiles early, so MTE2 overlaps the previous MAC.
+    # Keep the long BF16 pipeline's stage map. Only the Q load moves to the
+    # front of each query so AIC MTE2 can overlap the previous query's MAC.
     q_lead_shift = nb - 4 if q_prefetch and nb <= 15 else 0
-    long_q_prefetch = q_prefetch and q_lead_shift == 0 and nb > 15
     extra_metadata_lead = q_lead_shift > 0
     # Four complete groups avoid processing unused tiles in the last group.
     index_group = 512 if not packed and pipeline_stages and topk == 2048 else min(640, topk)
@@ -359,11 +358,7 @@ def hy4_sparse_attention(
                 job = step // nb
                 k = step % nb
                 qidx = bx + job * launch_cores
-                if long_q_prefetch and k == nb - 2:
-                    next_qidx = qidx + launch_cores
-                    if next_qidx < nq:
-                        T.copy(Q[next_qidx, :, :], q_l1[(job + 1) % q_slots, :, :])
-                if q_prefetch and k == 0 and not (long_q_prefetch and job > 0):
+                if q_prefetch and k == 0:
                     T.copy(Q[qidx, :, :], q_l1[job % q_slots, :, :])
                 if not pipeline_stages:
                     load_metadata(
