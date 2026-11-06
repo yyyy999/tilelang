@@ -75,16 +75,6 @@ def hy4_sparse_attention(
                 T.gemm(aq[:, :64], bv, cpv[d, :, :], clear_accum=clear, unit_flag_ctrl=0)
 
     @T.macro
-    def load_pv_operands(d, aq, bv, s_l1, kv_l1_0, kv_l1_1):
-        # V is already in L1. Issue it before P so MTE1 runs while softmax
-        # finishes the cross-core handoff into s_l1.
-        with T.Task():
-            T.copy(kv_l1_0[:, d * 128 : (d + 1) * 128], bv[:32, :], l0_pitch=8)
-            T.copy(kv_l1_1[:, d * 128 : (d + 1) * 128], bv[32:, :], l0_pitch=8)
-        if d == 0:
-            T.copy(s_l1, aq[:, :64])
-
-    @T.macro
     def softmax_vf(first, smaller, larger, p, s, maxima, sums, scaling_max, factors, delta, mask_base=0):
         with T.SimdVF():
             full = T.simd.pset(32)
@@ -525,6 +515,12 @@ def hy4_sparse_attention(
                     if nb == 2:
                         pv_flag = T.alloc_var("int32", init=T.if_then_else(k == nb - 1, 3, 2))
                     for _pv_region in T.Pipelined(1, num_stages=4):
+                        # First V slice does not depend on softmax. Issue it
+                        # before the P load so MTE1 overlaps that cross-core wait.
+                        with T.Task():
+                            T.copy(kv_l1_0[:, :128], bv[:32, :], l0_pitch=8)
+                            T.copy(kv_l1_1[:, :128], bv[32:, :], l0_pitch=8)
+                        T.copy(s_l1, aq[:, :64])
                         clear = T.alloc_var("int32", init=T.Cast("int32", ss_pairs[0] != T.uint64(0)))
                         ss_result[0] = T.Cast("uint32", clear)
                         for _pv_branches in T.serial(1):
@@ -537,11 +533,17 @@ def hy4_sparse_attention(
                                         scale_output_vf(False, d, factors, out, accum)
                                 emitted = emitted + 1
                                 for d in T.Pipelined(4, num_stages=2):
-                                    load_pv_operands(d, aq, bv, s_l1, kv_l1_0, kv_l1_1)
+                                    if d != 0:
+                                        with T.Task():
+                                            T.copy(kv_l1_0[:, d * 128 : (d + 1) * 128], bv[:32, :], l0_pitch=8)
+                                            T.copy(kv_l1_1[:, d * 128 : (d + 1) * 128], bv[32:, :], l0_pitch=8)
                                     pv_gemm(k, pv_flag if nb == 2 else 0, True, d, aq, bv, cpv)
                             else:
                                 for d in T.Pipelined(4, num_stages=2):
-                                    load_pv_operands(d, aq, bv, s_l1, kv_l1_0, kv_l1_1)
+                                    if d != 0:
+                                        with T.Task():
+                                            T.copy(kv_l1_0[:, d * 128 : (d + 1) * 128], bv[:32, :], l0_pitch=8)
+                                            T.copy(kv_l1_1[:, d * 128 : (d + 1) * 128], bv[32:, :], l0_pitch=8)
                                     pv_gemm(k, pv_flag if nb == 2 else 0, k == 0, d, aq, bv, cpv)
                     if last_output:
                         for d in T.Pipelined(4, num_stages=2):
