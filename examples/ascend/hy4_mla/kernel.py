@@ -49,9 +49,11 @@ def hy4_sparse_attention(
     valid_limit = nk
     nb0 = topk // 64
     nb = nb0
-    q_prefetch = pipeline_stages and 4 <= nb <= 15
+    q_prefetch = pipeline_stages and (4 <= nb <= 15 or (not packed and topk == 2048))
     q_slots = 2 if q_prefetch else 1
-    q_lead_shift = nb - 4 if q_prefetch else 0
+    # Keep the long BF16 pipeline's stage map. Only the Q load moves to the
+    # front of each query so AIC MTE2 can overlap the previous query's MAC.
+    q_lead_shift = nb - 4 if q_prefetch and nb <= 15 else 0
     extra_metadata_lead = q_lead_shift > 0
     # Four complete groups avoid processing unused tiles in the last group.
     index_group = 512 if not packed and pipeline_stages and topk == 2048 else min(640, topk)
@@ -518,13 +520,13 @@ def hy4_sparse_attention(
                                     else:
                                         scale_output_vf(False, d, factors, out, accum)
                                 emitted = emitted + 1
-                                for d in T.Pipelined(4, num_stages=4):
+                                for d in T.Pipelined(4, num_stages=2):
                                     with T.Task():
                                         T.copy(kv_l1_0[:, d * 128 : (d + 1) * 128], bv[:32, :], l0_pitch=8)
                                         T.copy(kv_l1_1[:, d * 128 : (d + 1) * 128], bv[32:, :], l0_pitch=8)
                                     pv_gemm(k, pv_flag if nb == 2 else 0, True, d, aq, bv, cpv)
                             else:
-                                for d in T.Pipelined(4, num_stages=4):
+                                for d in T.Pipelined(4, num_stages=2):
                                     with T.Task():
                                         T.copy(kv_l1_0[:, d * 128 : (d + 1) * 128], bv[:32, :], l0_pitch=8)
                                         T.copy(kv_l1_1[:, d * 128 : (d + 1) * 128], bv[32:, :], l0_pitch=8)
