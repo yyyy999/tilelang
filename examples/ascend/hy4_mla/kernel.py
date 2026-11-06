@@ -53,7 +53,8 @@ def hy4_sparse_attention(
     q_slots = 2 if q_prefetch else 1
     q_lead_shift = nb - 4 if q_prefetch else 0
     extra_metadata_lead = q_lead_shift > 0
-    index_group = min(640, topk)
+    # Four complete groups avoid processing unused tiles in the last group.
+    index_group = 512 if not packed and pipeline_stages and topk == 2048 else min(640, topk)
     direct_query_masks = pipeline_stages and 5 <= nb0 <= 10
     query_mask_stride = index_group // 2 + 32
 
