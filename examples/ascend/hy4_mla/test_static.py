@@ -27,7 +27,7 @@ class ResourcePreflight(unittest.TestCase):
 
     def test_shrinking_l0_view_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "preserve bit count"):
-            self.inspect_modified("bv = T.view(bq, shape=(64, 128))", "bv = T.view(bq, shape=(64, 64))")
+            self.inspect_modified("bv = T.view(bq, shape=(64, qk_tile))", "bv = T.view(bq, shape=(64, 64))")
 
     def test_overlapping_l1_rings_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "overlap"):
@@ -40,19 +40,31 @@ class ResourcePreflight(unittest.TestCase):
             for n in ast.walk(tree)
             if isinstance(n, ast.For) and isinstance(n.body[0], ast.Assign) and ast.unparse(n.body[0].targets[0]) == "qk_width"
         )
-        count = evaluate(loop.iter.args[0], {})
-        expression = loop.body[0].value
-        covered = []
-        widths = []
-        for d in range(count):
-            width = min(evaluate(arg, {"d": d}) for arg in expression.args)
-            self.assertGreater(width, 0)
-            self.assertEqual(width % 16, 0)
-            self.assertLessEqual(width, 128)
-            covered.extend(range(d * 128, d * 128 + width))
-            widths.append(width)
-        self.assertEqual(covered, list(range(576)))
-        self.assertEqual(widths[-1], 64)
+        builder = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "hy4_sparse_attention")
+        for packed, topk, expected_widths in (
+            (False, 2048, [192, 192, 192]),
+            (False, 64, [128, 128, 128, 128, 64]),
+            (True, 2048, [128, 128, 128, 128, 64]),
+        ):
+            with self.subTest(packed=packed, topk=topk):
+                env = {"packed": packed, "topk": topk, "pipeline_stages": True}
+                for name in ("wide_qk", "qk_tile", "qk_parts"):
+                    assignment = next(
+                        n for n in builder.body if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == name
+                    )
+                    env[name] = evaluate(assignment.value, env)
+                count = evaluate(loop.iter.args[0], env)
+                expression = loop.body[0].value
+                covered = []
+                widths = []
+                for d in range(count):
+                    width = min(evaluate(arg, {**env, "d": d}) for arg in expression.args)
+                    self.assertGreater(width, 0)
+                    self.assertEqual(width % 16, 0)
+                    covered.extend(range(d * env["qk_tile"], d * env["qk_tile"] + width))
+                    widths.append(width)
+                self.assertEqual(covered, list(range(576)))
+                self.assertEqual(widths, expected_widths)
 
 
 class MfuAccounting(unittest.TestCase):
