@@ -422,9 +422,6 @@ def hy4_sparse_attention(
                         )
                     # Publish scores only after the RoPE sub-K tile.
                     T.dual_copy(cq, p, unit_flag_ctrl=3)
-                    # Switch Cube to N while softmax runs, so the direction
-                    # drain is not exposed between softmax and PV.
-                    T.set_mmad_direction("n")
                     if k == 0:
                         with T.SimdVF():
                             T.fill(maxima, -3.4028234663852886e38)
@@ -504,6 +501,7 @@ def hy4_sparse_attention(
                 with T.Stage(5 + q_lead_shift if pipeline_stages else 0):
                     if k == 0:
                         emitted = 0
+                    T.set_mmad_direction("n")
                     last_output = k == nb - 1
                     if nb == 2:
                         pv_flag = T.alloc_var("int32", init=T.if_then_else(k == nb - 1, 3, 2))
@@ -520,13 +518,13 @@ def hy4_sparse_attention(
                                     else:
                                         scale_output_vf(False, d, factors, out, accum)
                                 emitted = emitted + 1
-                                for d in T.Pipelined(4, num_stages=2):
+                                for d in T.Pipelined(4, num_stages=4):
                                     with T.Task():
                                         T.copy(kv_l1_0[:, d * 128 : (d + 1) * 128], bv[:32, :], l0_pitch=8)
                                         T.copy(kv_l1_1[:, d * 128 : (d + 1) * 128], bv[32:, :], l0_pitch=8)
                                     pv_gemm(k, pv_flag if nb == 2 else 0, True, d, aq, bv, cpv)
                             else:
-                                for d in T.Pipelined(4, num_stages=2):
+                                for d in T.Pipelined(4, num_stages=4):
                                     with T.Task():
                                         T.copy(kv_l1_0[:, d * 128 : (d + 1) * 128], bv[:32, :], l0_pitch=8)
                                         T.copy(kv_l1_1[:, d * 128 : (d + 1) * 128], bv[32:, :], l0_pitch=8)
