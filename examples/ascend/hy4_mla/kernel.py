@@ -46,11 +46,6 @@ def hy4_sparse_attention(
     kv_stride = kv_width if kv_stride is None else kv_stride
     index_stride = topk if index_stride is None else index_stride
     out_strides = (64 * 512, 512, 1) if out_strides is None else out_strides
-    # QK576 fits three equal sub-K tiles in the large BF16 specialization.
-    wide_qk = not packed and pipeline_stages and topk == 2048
-    qk_tile = 192 if wide_qk else 128
-    qk_parts = 3 if wide_qk else 5
-    l0_versions = 2 if wide_qk else 4
     valid_limit = nk
     nb0 = topk // 64
     nb = nb0
@@ -59,7 +54,7 @@ def hy4_sparse_attention(
     q_lead_shift = nb - 4 if q_prefetch else 0
     extra_metadata_lead = q_lead_shift > 0
     # Four complete groups avoid processing unused tiles in the last group.
-    index_group = 512 if wide_qk else min(640, topk)
+    index_group = 512 if not packed and pipeline_stages and topk == 2048 else min(640, topk)
     direct_query_masks = pipeline_stages and 5 <= nb0 <= 10
     query_mask_stride = index_group // 2 + 32
 
@@ -69,13 +64,13 @@ def hy4_sparse_attention(
             if unit_flag != 0 if nb == 2 else k == 0 or k == nb - 1:
                 T.gemm(
                     aq[:, :64],
-                    bv[:, :128],
+                    bv,
                     cpv[d, :, :],
                     clear_accum=clear,
                     unit_flag_ctrl=unit_flag if nb == 2 else T.if_then_else(k == nb - 1, 3, 2),
                 )
             else:
-                T.gemm(aq[:, :64], bv[:, :128], cpv[d, :, :], clear_accum=clear, unit_flag_ctrl=0)
+                T.gemm(aq[:, :64], bv, cpv[d, :, :], clear_accum=clear, unit_flag_ctrl=0)
 
     @T.macro
     def softmax_vf(first, smaller, larger, p, s, maxima, sums, scaling_max, factors, delta, mask_base=0):
@@ -256,9 +251,9 @@ def hy4_sparse_attention(
             kv_l1_0 = T.alloc_l1((32, 576), "bfloat16")
             kv_l1_1 = T.alloc_l1((32, 576), "bfloat16")
             s_l1 = T.alloc_l1((64, 64), "bfloat16")
-            aq = T.alloc_l0a((64, qk_tile), "bfloat16")
-            bq = T.alloc_l0b((64, qk_tile), "bfloat16")
-            bv = T.view(bq, shape=(64, qk_tile))
+            aq = T.alloc_l0a((64, 128), "bfloat16")
+            bq = T.alloc_l0b((64, 128), "bfloat16")
+            bv = T.view(bq, shape=(64, 128))
             cq = T.alloc_l0c((64, 64), "float32")
             cpv = T.alloc_l0c((4, 64, 128), "float32")
             # A BF16 SIMD load reads 128 elements, including at column 512.
@@ -313,8 +308,8 @@ def hy4_sparse_attention(
                     kv_l1_0: 4,
                     kv_l1_1: 4,
                     s_l1: 2,
-                    aq: l0_versions,
-                    bq: l0_versions,
+                    aq: 4,
+                    bq: 4,
                     cq: 1,
                     cpv: 1,
                     # Gather at stage 1, pack at stage 2: two versions bound
@@ -410,20 +405,20 @@ def hy4_sparse_attention(
                         T.copy(Q[qidx, :, :], q_l1[0, :, :])
                     T.set_mmad_direction("m")
                     # One QK loop keeps latent and RoPE under the same L1
-                    # ownership/sync channel, including the RoPE contribution.
-                    for d in T.Pipelined(qk_parts, num_stages=l0_versions):
-                        qk_width = T.min(qk_tile, 576 - d * qk_tile)
-                        T.copy(q_l1[job % q_slots, :, d * qk_tile : d * qk_tile + qk_width], aq[:, :qk_width], l0_pitch=4)
+                    # ownership/sync channel. Its last sub-K tile is 64 wide.
+                    for d in T.Pipelined(5, num_stages=4):
+                        qk_width = T.min(128, 576 - d * 128)
+                        T.copy(q_l1[job % q_slots, :, d * 128 : d * 128 + qk_width], aq[:, :qk_width], l0_pitch=4)
                         with T.Task():
-                            T.copy(kv_l1_0[:, d * qk_tile : d * qk_tile + qk_width], bq[:32, :qk_width], l0_pitch=4)
-                            T.copy(kv_l1_1[:, d * qk_tile : d * qk_tile + qk_width], bq[32:, :qk_width], l0_pitch=4)
+                            T.copy(kv_l1_0[:, d * 128 : d * 128 + qk_width], bq[:32, :qk_width], l0_pitch=4)
+                            T.copy(kv_l1_1[:, d * 128 : d * 128 + qk_width], bq[32:, :qk_width], l0_pitch=4)
                         T.gemm(
                             aq[:, :qk_width],
                             bq[:, :qk_width],
                             cq,
                             transpose_B=True,
                             clear_accum=d == 0,
-                            unit_flag_ctrl=T.if_then_else(d == qk_parts - 1, 3, 2),
+                            unit_flag_ctrl=T.if_then_else(d == 4, 3, 2),
                         )
                     # Publish scores only after the RoPE sub-K tile.
                     T.dual_copy(cq, p, unit_flag_ctrl=3)
@@ -525,14 +520,14 @@ def hy4_sparse_attention(
                                 emitted = emitted + 1
                                 for d in T.Pipelined(4, num_stages=2):
                                     with T.Task():
-                                        T.copy(kv_l1_0[:, d * 128 : (d + 1) * 128], bv[:32, :128], l0_pitch=8)
-                                        T.copy(kv_l1_1[:, d * 128 : (d + 1) * 128], bv[32:, :128], l0_pitch=8)
+                                        T.copy(kv_l1_0[:, d * 128 : (d + 1) * 128], bv[:32, :], l0_pitch=8)
+                                        T.copy(kv_l1_1[:, d * 128 : (d + 1) * 128], bv[32:, :], l0_pitch=8)
                                     pv_gemm(k, pv_flag if nb == 2 else 0, True, d, aq, bv, cpv)
                             else:
                                 for d in T.Pipelined(4, num_stages=2):
                                     with T.Task():
-                                        T.copy(kv_l1_0[:, d * 128 : (d + 1) * 128], bv[:32, :128], l0_pitch=8)
-                                        T.copy(kv_l1_1[:, d * 128 : (d + 1) * 128], bv[32:, :128], l0_pitch=8)
+                                        T.copy(kv_l1_0[:, d * 128 : (d + 1) * 128], bv[:32, :], l0_pitch=8)
+                                        T.copy(kv_l1_1[:, d * 128 : (d + 1) * 128], bv[32:, :], l0_pitch=8)
                                     pv_gemm(k, pv_flag if nb == 2 else 0, k == 0, d, aq, bv, cpv)
                     if last_output:
                         for d in T.Pipelined(4, num_stages=2):
