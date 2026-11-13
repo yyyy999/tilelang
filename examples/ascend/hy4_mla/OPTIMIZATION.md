@@ -109,3 +109,15 @@ A5 物理 2 号卡，28 AIC，`4096×4096`、TopK=2048，`make_inputs` seed 42�
 `6d2e6fc2` 把 P 装载放进 4 次 PV 内层流水，只在 `d == 0` 执行。编译通过，out、max、lse 与 Best 和 Baseline 都是 `torch.equal`。同一次 A/B：Baseline 3318 µs（93.14%），Best 3203 µs（96.50%），候选 6763 µs（45.70%）。flag 水位 MTE1→M 12、M→MTE1 18，超过 dav-3510 的 8，多余 flag 走 `get_buf`/`rls_buf`。
 
 `61f0bf1b` 把第一片 V 留在内层循环外面，P 装载回到原位，循环里跳过 `d == 0` 的 V。InsertSync 报错：`uncovered multi-buffer owner exclusion at logical distance 2`。不更新 Best，kernel 退回 `4f10f35c`。
+
+## 两条 query 的仿真，以及把 P/V0 拆出内层循环
+
+Best 仍是 `4f10f35c`，当前 `hy4-mla` 的 kernel 与它一致。同一次 A/B 里 Best 中位数 3202.73 µs，padded MFU 96.50%（378 TFLOP/s，28 AIC）。97% 对应 3186 µs。最慢核要做 147 条 query，理想 MAC 约 3136 µs；3203 µs 里大约 42 µs 是 MAD 空闲，25 µs 是超出理想 MAC 的额外 MAD。分到每个 64 行 tile 大约 15 个周期。
+
+`f2f69842` 的 msprof 与 Best 同级：AIC MAD 98.7%，MTE1 97.9%，MTE2 5.0%；AIV MTE2 31%，scalar 84%。Cube 是时钟。
+
+Best 在 WSL CANN 9.2.0、模型 Ascend950PR_9589 上跑了 `nq=2, nk=2048, topk=2048`，一核。归档 `/root/hy4_nq2_sim/npusim_20261106195428_hy4_nq2.py`。`kernel_total_clocks` 89598，1.65 GHz，约 54.3 µs，不能换成设备时间。AIC Cube 82.0%，AIV0 MTE2 81.4%，AIV1 MTE2 78.5%。第二条 query 的 MMAD 窗口 40712 周期，并集忙碌 36649，空闲 4063，17 个空洞，宽度 119–428 周期。相邻 MMAD 的间隔中位数是 −24 周期，两个 Cube slot 已经叠上。这些空洞仍是仿真里的 gather 量级。设备上 AIV MTE2 只有 31%，所以这条仿真不能用来决定下一次改动。
+
+独立 worktree `d:/codes/yyz/tilelang-hy4-pv`，分支 `hy4-pv-split-issue`，未提交。stage 5 把 P 和第一片 V 放进同一个 `T.Task`，剩下三片 V 留在 `Pipelined(3, num_stages=2)`。假设 L0A 和 L0B 两条 MTE1 可以重叠，同时避开上一次四次循环里的 flag 溢出。WSL 编译失败：`InsertSync cannot materialize an uncovered multi-buffer owner exclusion at logical distance -1 (paired distance 2)`。和 `61f0bf1b` 是同一条证明缺口。不更新 Best。仿真树 `/root/tilelang-hy4` 的 kernel 已拷回 Best。
+
+静态预算：UB 238464 / 253952，余 15488 B。把分数加宽到 128 列会再占 12288 B，纸面上还剩约 3 KB。L0A/L0B 已经各占满 64 KB。

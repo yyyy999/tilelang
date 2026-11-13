@@ -893,8 +893,8 @@ baseline.
 
 ### 12.4 Measure operation cycles
 
-Use npusim to investigate the cycles spent in a VF, data transfer, Cube
-operation, synchronization handoff, or a sequence of these in your kernel.
+On the local WSL CANN 9.2.0 install, investigate those cycles with
+[npusim](../cannsim-optimization/SKILL.md). `cannsim` is the deprecated alias.
 Choose the measured region and preserve its shapes, dtypes, layouts, buffer
 lifetimes, and dependencies. For `T.SimtVF` and `T.SimdVF`, also preserve the
 actual call site, thread dimensions, masks, and loop trip counts. Match macro

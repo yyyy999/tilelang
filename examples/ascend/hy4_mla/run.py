@@ -9,7 +9,7 @@ import torch
 import torch_npu  # noqa: F401
 
 from examples.ascend.hy4_mla.mfu import cube_bf16_tflops, gemm_flops, mfu
-from examples.ascend.hy4_mla.prefill import compile_bf16
+from examples.ascend.hy4_mla.compile_sparse_fwd import compile_bf16
 from examples.ascend.hy4_mla.reference import sparse_mla_reference
 from examples.ascend.hy4_mla.testing import check_outputs, make_inputs
 

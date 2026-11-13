@@ -1,4 +1,4 @@
-"""TileLang Ascend entry point for the Hy4 FP8 sparse decode subset."""
+"""TileLang Ascend entry point for the Hy4 FP8 paged sparse MLA subset."""
 
 import math
 from functools import lru_cache
@@ -10,7 +10,7 @@ from examples.ascend.hy4_mla.interface import _check_tensor
 
 
 @lru_cache(maxsize=32)
-def _get_decode_kernel(nq, nk, topk, scale, sink, device):
+def _get_kvcache_kernel(nq, nk, topk, scale, sink, device):
     import tilelang
     from tilelang.carver.arch.driver.ascend_driver import get_num_cube_cores
 
@@ -59,9 +59,9 @@ def flash_mla_with_kvcache(q, k_cache, indices, *, softmax_scale, attn_sink=None
         if not tensor.is_contiguous():
             raise ValueError(f"{name} must be contiguous")
     if device.type != "npu":
-        raise ValueError("Hy4 sparse decode requires an Ascend NPU")
+        raise ValueError("Hy4 flash_mla_with_kvcache requires an Ascend NPU")
     nq, nk = batch * seqlen, pages * PAGE_SIZE
-    kernel = _get_decode_kernel(nq, nk, topk, float(softmax_scale), attn_sink is not None, device)
+    kernel = _get_kvcache_kernel(nq, nk, topk, float(softmax_scale), attn_sink is not None, device)
     sink = torch.empty(64, dtype=torch.float32, device=device) if attn_sink is None else attn_sink
     lengths = torch.empty(nq, dtype=torch.int32, device=device)
     with torch.npu.device(device):

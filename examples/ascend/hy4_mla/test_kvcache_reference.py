@@ -4,7 +4,7 @@ import math
 
 import torch
 
-from examples.ascend.hy4_mla.decode_reference import fp8_sparse_decode_reference
+from examples.ascend.hy4_mla.kvcache_reference import fp8_sparse_kvcache_reference
 from examples.ascend.hy4_mla.fp8_cache import PAGE_SIZE, pack_records, physical_rows, records_to_pages, unpack_records
 
 
@@ -59,7 +59,7 @@ def test_duplicate_slots_both_contribute():
     )
     q = torch.zeros(1, 1, 64, 576, dtype=torch.bfloat16)
     indices = torch.tensor([[[1, 1]]], dtype=torch.int32)
-    output, lse = fp8_sparse_decode_reference(q, cache, indices, None, scale=1 / 16)
+    output, lse = fp8_sparse_kvcache_reference(q, cache, indices, None, scale=1 / 16)
     # Two copies of the same row, zero query scores: the value is unchanged and the LSE counts both copies.
     torch.testing.assert_close(output, torch.full_like(output, 3.0))
     torch.testing.assert_close(lse, torch.full_like(lse, math.log(2)))
@@ -76,13 +76,13 @@ def test_invalid_rows_and_positive_inf_sink():
     )
     q = torch.zeros(1, 2, 64, 576, dtype=torch.bfloat16)
     indices = torch.tensor([[[-1, PAGE_SIZE], [0, -1]]], dtype=torch.int32)
-    output, lse = fp8_sparse_decode_reference(q, cache, indices, None, scale=1 / 16)
+    output, lse = fp8_sparse_kvcache_reference(q, cache, indices, None, scale=1 / 16)
     assert torch.count_nonzero(output[0, 0]) == 0
     torch.testing.assert_close(output[0, 1], torch.ones_like(output[0, 1]))
     assert torch.isposinf(lse[0, :, 0]).all()
     torch.testing.assert_close(lse[0, :, 1], torch.zeros(64))
 
     sink = torch.full((64,), float("inf"))
-    sunk, sunk_lse = fp8_sparse_decode_reference(q[:, 1:], cache, indices[:, 1:], sink, scale=1 / 16)
+    sunk, sunk_lse = fp8_sparse_kvcache_reference(q[:, 1:], cache, indices[:, 1:], sink, scale=1 / 16)
     assert torch.count_nonzero(sunk) == 0
     torch.testing.assert_close(sunk_lse, torch.zeros_like(sunk_lse))

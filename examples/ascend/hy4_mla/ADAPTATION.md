@@ -1,4 +1,4 @@
-# Hy4 preview BF16 调用适配合同
+# Hy4 preview BF16 `flash_mla_sparse_fwd` 调用适配合同
 
 更新日期：2026-11-05。本文补充[TARGET.md](TARGET.md)的核心计算合同。
 
@@ -14,7 +14,7 @@ flash_mla_sparse_fwd(q, kv, indices, sm_scale,
 固定源码参照：[Hy4 wrapper](https://github.com/vllm-project/vllm/blob/db914cad5bac261dbcd7cf05ded573c1d704f650/vllm/models/hy_v4/nvidia/flashmla_sparse.py#L217)、
 [FlashMLA接口](https://github.com/vllm-project/FlashMLA/blob/847ef308bb7a6828c8117301f5a5a84a095a90e8/flash_mla/flash_mla_interface.py#L214)。
 这是576→512的吸收投影后接口，不是Transformers中展开的256维QK、256维V的完整Attention接口。
-FP8分页Decode、模型backend注册及indexer仍不在本次适配范围。
+FP8 分页 KV 由独立的 [`flash_mla_with_kvcache`](KVCACHE_TARGET.md) 入口覆盖。模型 backend 注册和 indexer 由上层处理。
 
 ## 输入、输出和分派要求
 
@@ -73,8 +73,9 @@ Q/KV限定有限值，不承诺一般NaN传播行为。
 - 本地CPU适配测试9项通过，原reference测试7项通过；适配测试还执行23个subtest。
   CPU executor是mock，不等于核心数值已在NPU通过。
 - 本地22个核心资源配置扫描通过。K2048的UB保守预算仍为239488 B，L1地址终点458752 B。
-- 新增`check_lowering --pitched`及`test_interface_npu.py`作为后续native/设备验收入口，本轮未运行。
-- 未注册到vLLM-Ascend或Transformers，也未实现量化Decode、H128或专用小head高性能kernel。
+- 用户确认 `test_interface_npu.py` 在实卡上全部通过。现有用例使用 NQ=3、NK=79、TopK=64，覆盖 H8/H16/H32/H64、可选 sink 和长度，以及 H64 带 pitch 的预分配输出。
+- TopK=2048 的适配入口回归和真实 Hy4 调用张量回放仍待验收。
+- 未注册到vLLM-Ascend或Transformers，本 BF16 入口的兼容范围为 H≤64，小 head 使用补齐路径。
 
 可复现的本地检查（CPU PyTorch、pytest；无需TileLang原生库或NPU）：
 

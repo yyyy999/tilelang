@@ -14,7 +14,7 @@ BF16模型调用接口的增量要求与适配状态见[ADAPTATION.md](ADAPTATIO
 
 第一阶段交付给定 indices 的 BF16 核心，处理已完成投影吸收和 RoPE 的 Q/KV，返回 latent Attention 结果及统计量。Indexer、TopK 选择、跨层索引共享、模型投影、512→256 value 投影、gate 和 O 投影由上游或下游完成。
 
-第一阶段采用 BF16 连续 KV 行；不会宣称覆盖生产量化分页 Decode。BF16 核心本身可以处理一个或多个 query，Prefill/Decode 的服务集成另行验收。
+BF16 `flash_mla_sparse_fwd` 使用展平的 KV 行视图，可以处理一个或多个 query。FP8 分页缓存由独立的 [`flash_mla_with_kvcache`](KVCACHE_TARGET.md) 处理，服务集成另行验收。
 
 ## 2. 版本与证据
 
@@ -142,7 +142,7 @@ TopK2048对应32个64-token块；当前`q_prefetch`仅在4≤nb≤15启用，目
 hy4_mla/
   TARGET.md          # 目标、证据、适配方案与待确认项
   kernel.py          # 576→512 sparse MLA + sink
-  prefill.py         # 第一阶段BF16编译入口
+  compile_sparse_fwd.py  # BF16 flash_mla_sparse_fwd 编译入口
   reference.py       # 独立FP32数学reference及兼容性输出约定
   testing.py         # 输入构造与接口适配
   test_hy4_mla.py    # NPU精度和边界回归
@@ -150,7 +150,7 @@ hy4_mla/
   run.py            # 校验后可选事件计时，输出原始记录
 ```
 
-量化`decode.py`及`quantization.py`在缓存合同确定后新增，不预先复制不兼容的V4.1接口。
+Hy4 的 `flash_mla_with_kvcache.py` 与 `quantization.py` 使用独立的 [656 B 缓存合同](KVCACHE_TARGET.md)。
 
 ## 9. 验收与性能口径
 

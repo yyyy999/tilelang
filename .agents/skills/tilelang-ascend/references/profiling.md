@@ -145,6 +145,11 @@ and simulator versions; load that installation's `set_env.sh` if needed.
 
 ### Record execution
 
+On the local WSL CANN 9.2.0 install, record with
+[npusim](../../cannsim-optimization/SKILL.md) (`npusim record -s Ascend950`).
+`cannsim` is the deprecated alias. The older `npusim record -n` example below
+does not match this install's CLI.
+
 Use `npusim` and inspect `npusim record --help`.
 Select the model matching the compiler target and a fresh output directory.
 For example, an Ascend950 run with a Python launcher uses:

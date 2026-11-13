@@ -23,8 +23,7 @@ def _check_tensor(tensor, name, shape, dtype, device):
         raise ValueError(f"{name} must be on {device}, got {tensor.device}")
     if tensor.stride(-1) != 1:
         raise ValueError(f"{name} must have last-dimension stride 1")
-    # Restrict to ordered, non-overlapping rows with optional gaps. This admits
-    # padded workspace slices without silently accepting transposes/broadcasts.
+    # Allow pitch between non-overlapping rows.
     span = 1
     for extent, stride in zip(reversed(tensor.shape), reversed(tensor.stride())):
         if stride <= 0 or (extent > 1 and stride < span):
@@ -48,24 +47,23 @@ def _overlapping_spans(a, b):
 
 @lru_cache(maxsize=32)
 def _get_kernel(nq, nk, topk, scale, sink, variable_lengths, q_strides, kv_stride, index_stride, out_strides, device):
-    from examples.ascend.hy4_mla.prefill import compile_bf16
+    from examples.ascend.hy4_mla.compile_sparse_fwd import compile_bf16
 
     if torch.device(device).type != "npu":
         raise ValueError("Hy4 sparse MLA execution requires an Ascend NPU")
-    with torch.npu.device(device):
-        return compile_bf16(
-            nq,
-            nk,
-            topk,
-            scale=scale,
-            sink=sink,
-            variable_lengths=variable_lengths,
-            q_strides=q_strides,
-            kv_stride=kv_stride,
-            index_stride=index_stride,
-            out_strides=out_strides,
-            explicit_outputs=True,
-        )
+    return compile_bf16(
+        nq,
+        nk,
+        topk,
+        scale=scale,
+        sink=sink,
+        variable_lengths=variable_lengths,
+        q_strides=q_strides,
+        kv_stride=kv_stride,
+        index_stride=index_stride,
+        out_strides=out_strides,
+        explicit_outputs=True,
+    )
 
 
 def flash_mla_sparse_fwd(q, kv, indices, sm_scale, d_v=512, attn_sink=None, topk_length=None, out=None):
@@ -131,17 +129,13 @@ def flash_mla_sparse_fwd(q, kv, indices, sm_scale, d_v=512, attn_sink=None, topk
         kernel_out = out.new_empty((nq, 64, 512))
     else:
         kernel_out = out
-    # These arguments still have declared shapes in the PrimFunc, but their
-    # specializations never read the placeholders. No full/zero-fill is needed.
+    # The disabled specializations leave these PrimFunc arguments unread.
     if not use_sink:
         attn_sink = torch.empty((64,), dtype=torch.float32, device=q.device)
     if not use_lengths:
         topk_length = torch.empty((nq,), dtype=torch.int32, device=q.device)
     flat_kv = kv.squeeze(1)
     flat_indices = indices.squeeze(1)
-    # The caller's current device need not be q.device. Bind both compilation
-    # and launch/stream selection to the input device. CPU is used only by the
-    # mocked-executor tests; the real factory rejects it.
     with torch.npu.device(q.device) if q.device.type == "npu" else nullcontext():
         kernel = _get_kernel(
             nq,

@@ -1,8 +1,8 @@
-"""FP32 reference for the Hy4 656-byte FP8 sparse decode contract.
+"""FP32 reference for the Hy4 656-byte FP8 flash_mla_with_kvcache contract.
 
 Dequantized latent values are rounded to BF16 before the attention math, matching
 the first kernel version's Cube inputs. RoPE stays in its stored BF16 values.
-The returned LSE follows FlashMLA decode layout ``[batch, heads, seq]`` and
+The returned LSE follows flash_mla_with_kvcache layout ``[batch, heads, seq]`` and
 excludes the sink. Empty rows return a zero output and +inf LSE.
 """
 
@@ -14,8 +14,8 @@ from examples.ascend.hy4_mla.fp8_cache import physical_rows
 from examples.ascend.hy4_mla.reference import sparse_mla_reference
 
 
-def fp8_sparse_decode_reference(q, k_cache, indices, attn_sink=None, *, scale):
-    """Return ``(output, lse)`` for one paged FP8 sparse decode call.
+def fp8_sparse_kvcache_reference(q, k_cache, indices, attn_sink=None, *, scale):
+    """Return ``(output, lse)`` for one paged FP8 sparse MLA call.
 
     ``q`` is ``[B, Sq, 64, 576]`` BF16. ``k_cache`` is ``[P, 64, 1, 656]``
     uint8. ``indices`` is ``[B, Sq, K]`` int32, addressing

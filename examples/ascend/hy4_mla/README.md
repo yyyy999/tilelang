@@ -16,9 +16,9 @@ maximum/LSE exclude sink. Invalid indices (negative or >= nk) are ignored,
 duplicates retain multiplicity, and lengths mask a prefix before validity
 filtering. Empty rows return zero output, -inf maximum and +inf LSE.
 Indices must already encode causal/sequence eligibility; there is no additional
-causal mask. No paged or quantized KV cache adapter is included yet.
+causal mask. The BF16 entry point uses a flat KV row view.
 
-## BF16 call adapter
+## BF16 `flash_mla_sparse_fwd`
 
 [ADAPTATION.md](ADAPTATION.md) defines the model-call contract and validation status.
 The compatibility entry point is `interface.flash_mla_sparse_fwd`:
@@ -36,7 +36,7 @@ output, maximum, lse = flash_mla_sparse_fwd(
 The wrapper selects sink/length specializations, flattens single-head views and
 pads H<64 queries/sinks. H64 writes directly to a supplied output, including
 supported positive-pitch workspace views. Small-head calls compute a temporary
-H64 output before copying the real heads to `out`. FP8 Decode is not included.
+H64 output before copying the real heads to `out`.
 The model/framework still needs to select this Ascend backend; adding an example
 entry point does not register it in vLLM or Transformers.
 
@@ -46,10 +46,24 @@ CPU-only adapter checks use a mock executor, without loading TileLang native lib
 python -m unittest examples.ascend.hy4_mla.test_interface -v
 ```
 
-Device acceptance for the new adapter is a separate, not-yet-validated step:
+Run the BF16 adapter device tests with:
 
 ```bash
 python -m pytest examples/ascend/hy4_mla/test_interface_npu.py -x -q
+```
+
+## FP8 `flash_mla_with_kvcache`
+
+Use the independent entry point for the supported Hy4 656-byte `fp8_ds_mla`
+paged KV cache. See [KVCACHE_TARGET.md](KVCACHE_TARGET.md) for the supported
+subset, input shapes, and validation commands.
+
+```python
+from examples.ascend.hy4_mla.flash_mla_with_kvcache import flash_mla_with_kvcache
+
+output, lse = flash_mla_with_kvcache(
+    q, k_cache, indices, softmax_scale=sm_scale, attn_sink=attn_sink,
+)
 ```
 
 ## Run
@@ -91,7 +105,8 @@ device jobs can distort results. There is no Hy4 performance claim yet.
 | File | Purpose |
 | --- | --- |
 | `kernel.py` | Persistent sparse gather, QK512+64, softmax/sink, PV512 pipeline |
-| `prefill.py` | `compile_bf16` compilation entry point |
+| `compile_sparse_fwd.py` | `compile_bf16` compilation entry point |
+| `flash_mla_with_kvcache.py` | FP8 paged sparse MLA entry point |
 | `reference.py` | FP32 mathematical reference, independent of TileLang/NPU |
 | `testing.py` | Reproducible boundary inputs and numerical checks |
 | `test_reference.py` | Hand-computable CPU semantic tests |

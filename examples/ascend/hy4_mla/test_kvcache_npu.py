@@ -1,16 +1,16 @@
-"""Device acceptance for the Hy4 656-byte sparse decode kernel."""
+"""Device acceptance for the Hy4 656-byte flash_mla_with_kvcache kernel."""
 
 import pytest
 import torch
 
-from examples.ascend.hy4_mla.decode import flash_mla_with_kvcache
-from examples.ascend.hy4_mla.decode_reference import fp8_sparse_decode_reference
+from examples.ascend.hy4_mla.flash_mla_with_kvcache import flash_mla_with_kvcache
+from examples.ascend.hy4_mla.kvcache_reference import fp8_sparse_kvcache_reference
 from examples.ascend.hy4_mla.fp8_cache import pack_records, records_to_pages
 from examples.ascend.hy4_mla.test_interface_npu import npu as npu
 
 
 @pytest.mark.parametrize("batch,seqlen,topk,use_sink", [(1, 1, 64, False), (2, 4, 2048, True)])
-def test_fp8_sparse_decode(npu, batch, seqlen, topk, use_sink):
+def test_fp8_sparse_kvcache(npu, batch, seqlen, topk, use_sink):
     rng = torch.Generator().manual_seed(2026)
     tokens = 128
     q = (torch.randn(batch, seqlen, 64, 576, generator=rng) * 0.3).bfloat16()
@@ -27,7 +27,7 @@ def test_fp8_sparse_decode(npu, batch, seqlen, topk, use_sink):
         sink[0], sink[-1] = -torch.inf, torch.inf
 
     scale = 1 / 16
-    expected = fp8_sparse_decode_reference(q, cache, indices, sink, scale=scale)
+    expected = fp8_sparse_kvcache_reference(q, cache, indices, sink, scale=scale)
     inputs = tuple(t.to(npu) for t in (q, cache, indices))
     sink_npu = None if sink is None else sink.to(npu)
     for _ in range(2):

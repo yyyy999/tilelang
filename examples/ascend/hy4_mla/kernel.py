@@ -47,17 +47,14 @@ def hy4_sparse_attention(
     index_stride = topk if index_stride is None else index_stride
     out_strides = (64 * 512, 512, 1) if out_strides is None else out_strides
     valid_limit = nk
-    nb0 = topk // 64
-    nb = nb0
+    nb = topk // 64
     q_prefetch = pipeline_stages and (4 <= nb <= 15 or (not packed and topk == 2048))
     q_slots = 2 if q_prefetch else 1
-    # Keep the long BF16 pipeline's stage map. Only the Q load moves to the
-    # front of each query so AIC MTE2 can overlap the previous query's MAC.
     q_lead_shift = nb - 4 if q_prefetch and nb <= 15 else 0
     extra_metadata_lead = q_lead_shift > 0
     # Four complete groups avoid processing unused tiles in the last group.
     index_group = 512 if not packed and pipeline_stages and topk == 2048 else min(640, topk)
-    direct_query_masks = pipeline_stages and 5 <= nb0 <= 10
+    direct_query_masks = pipeline_stages and 5 <= nb <= 10
     query_mask_stride = index_group // 2 + 32
 
     @T.macro
@@ -229,14 +226,11 @@ def hy4_sparse_attention(
                 hi = larger[sid * 16 + i]
             second = T.if_then_else(hi < valid_limit, hi, lo)
             n_burst = T.alloc_var("int32", init=T.if_then_else(lo < valid_limit, 2, 0))
-            # Widen the row index before multiplying by the physical row
-            # stride; casting the product afterwards would retain uint32 wrap.
+            # Widen the row offset before stride multiplication.
             safe_lo = T.Cast("int64", T.if_then_else(n_burst == 0, T.uint32(0), lo))
             stride = T.alloc_var("int64", init=T.Cast("int64", second - lo))
             pairs = T.StridedTensor((nk, 2, kv_width), (kv_stride, stride * kv_stride, 1), kv_dtype, data=KV.data)
-            # Match FlashMLA's zero-burst workaround: no invalid GM read, and the
-            # initialized UB row is retained. Keep the assumption local to DMA.
-            # Retain gathered KV lines in L2 for reuse across queries.
+            # Scope the DMA bounds assumptions to this copy.
             for _ in T.Serial(1):
                 T.assume(n_burst > 0)
                 T.assume(n_burst == 0 or safe_lo < pairs.shape[0])
@@ -258,8 +252,7 @@ def hy4_sparse_attention(
             bv = T.view(bq, shape=(64, 128))
             cq = T.alloc_l0c((64, 64), "float32")
             cpv = T.alloc_l0c((4, 64, 128), "float32")
-            # A BF16 SIMD load reads 128 elements, including at column 512.
-            # Pad each gathered row so the RoPE load stays within its UB row.
+            # The 128-element BF16 load at column 512 requires a 640-element row.
             kv = T.alloc_shared((32, kv_ub_width), kv_dtype)
             nz = T.alloc_shared((33, 576), "bfloat16")
             p = T.alloc_shared((32, 64), "float32")
@@ -283,9 +276,7 @@ def hy4_sparse_attention(
             ss = T.alloc_ss((2,), "uint32")
             ss_pairs = T.view(ss, shape=(1,), dtype="uint64")
             ss_result = T.alloc_ss((1,), "uint32")
-            # One 576-wide transfer per AIV retains the original two KV
-            # channels. Each four-version KV ring now occupies 144 KiB;
-            # reserve 144 KiB for the largest (two-slot) Q allocation too.
+            # Reserve 144 KiB each for the two KV rings and the double-buffered Q.
             T.annotate_buffer_addresses({kv_l1_0: 0, q_l1: 147456, kv_l1_1: 294912, s_l1: 442368})
             T.annotate_layout(
                 {
@@ -302,12 +293,8 @@ def hy4_sparse_attention(
                 }
             )
             if q_prefetch:
-                # The annotation is the cross-iteration distance the dependence
-                # analysis is willing to search, and every unproved distance
-                # falls through to Z3. A full lead reuses a Q slot inside that
-                # window, so it must search 2*nb. Lead 0 reuses a slot nb+1
-                # iterations later, outside this 6-stage pipe; searching only
-                # the pipe window still covers every pair that can be in flight.
+                # Search across Q-slot reuse for a shifted pipeline and across
+                # the in-flight stages for the unshifted pipeline.
                 q_reuse_span = 2 * nb if q_lead_shift else 8
                 T.annotate_manual_multi_buffer({q_l1: q_reuse_span})
             T.annotate_manual_multi_buffer({accum: 4})
@@ -321,8 +308,6 @@ def hy4_sparse_attention(
                     bq: 4,
                     cq: 1,
                     cpv: 1,
-                    # Gather at stage 1, pack at stage 2: two versions bound
-                    # the next producer while retaining DMA/packing overlap.
                     kv: 2,
                     nz: 1,
                     p: 1,
@@ -413,8 +398,6 @@ def hy4_sparse_attention(
                     if not q_prefetch and k == 0:
                         T.copy(Q[qidx, :, :], q_l1[0, :, :])
                     T.set_mmad_direction("m")
-                    # One QK loop keeps latent and RoPE under the same L1
-                    # ownership/sync channel. Its last sub-K tile is 64 wide.
                     for d in T.Pipelined(5, num_stages=4):
                         qk_width = T.min(128, 576 - d * 128)
                         T.copy(q_l1[job % q_slots, :, d * 128 : d * 128 + qk_width], aq[:, :qk_width], l0_pitch=4)
@@ -429,7 +412,7 @@ def hy4_sparse_attention(
                             clear_accum=d == 0,
                             unit_flag_ctrl=T.if_then_else(d == 4, 3, 2),
                         )
-                    # Publish scores only after the RoPE sub-K tile.
+                    # Publish scores after the final 64-wide RoPE tile.
                     T.dual_copy(cq, p, unit_flag_ctrl=3)
                     if k == 0:
                         with T.SimdVF():

@@ -1,4 +1,4 @@
-# Hy4 preview FP8 sparse Decode 算子目标
+# Hy4 preview FP8 `flash_mla_with_kvcache` 算子目标
 
 状态：待确认。核对日期：2026-11-06。
 
@@ -34,7 +34,7 @@ Q、indices 及输出首版采用连续布局。索引由调用方提供，请�
 
 每个有效槽将 FP8 latent 按 128 元素一组乘对应的 FP32 scale。首版将乘积舍入为 BF16，供现有 BF16 Cube QK/PV 路径消费。QK 使用反量化 latent512 与原始 RoPE64。PV 只使用 latent512。参考实现应复现该中间精度边界。
 
-Sink 作为零 value 的虚拟槽，仅进入输出归一化。LSE 排除 sink。空行返回零输出、LSE=+inf。Sink=-inf 等价于关闭该 head 的 sink，+inf 使该 head 输出为零。 [FlashMLA Decode 参考](https://github.com/vllm-project/FlashMLA/blob/847ef308bb7a6828c8117301f5a5a84a095a90e8/tests/ref.py#L60)
+Sink 作为零 value 的虚拟槽，仅进入输出归一化。LSE 排除 sink。空行返回零输出、LSE=+inf。Sink=-inf 等价于关闭该 head 的 sink，+inf 使该 head 输出为零。 [FlashMLA flash_mla_with_kvcache 参考](https://github.com/vllm-project/FlashMLA/blob/847ef308bb7a6828c8117301f5a5a84a095a90e8/tests/ref.py#L60)
 
 ## 实现与验收顺序
 
@@ -43,18 +43,18 @@ Sink 作为零 value 的虚拟槽，仅进入输出归一化。LSE 排除 sink�
 3. 实卡用例覆盖 Sq=1/4、不同 B、TopK=64/2048、乱序跨页索引、全无效行、sink 开关。验收 output 和 LSE 的精度、布局及重复 launch。
 4. 性能先测小 batch Decode 延迟和多 batch 吞吐。Split-KV 根据实测决定，采用时在全局合并后应用一次 sink。
 
-后续扩展项包括 H128、可选长度、额外缓存、更多 stride，以及框架注册。BF16 Prefill 和仓库现有 V4.1 的 528 B / 288 B Decode 各自保留现有接口。
+后续扩展项包括 H128、可选长度、额外缓存、更多 stride，以及框架注册。BF16 `flash_mla_sparse_fwd` 和仓库参考实现的 V4.1 528 B / 288 B 缓存各有独立合同。
 
 ## 本地检查入口
 
 ```bash
 python examples/ascend/hy4_mla/check_resources.py --kv-format fp8_ds_mla --topk 2048
-python -m pytest -q examples/ascend/hy4_mla/test_decode_reference.py
+python -m pytest -q examples/ascend/hy4_mla/test_kvcache_reference.py
 python -m examples.ascend.hy4_mla.check_lowering --kv-format fp8_ds_mla --topk 64 2048 --output /tmp/hy4-decode-lowering
-python -m pytest -q examples/ascend/hy4_mla/test_decode_npu.py
+python -m pytest -q examples/ascend/hy4_mla/test_kvcache_npu.py
 ```
 
-独立入口在 `decode.py`。Packed cache 按 656 B 读取，搬入 UB 时使用 672 B 行距以满足 32 B 对齐。反量化直接写入 BF16 NZ tile，QK、PV 和 sink 沿用现有计算流水。
+独立入口在 `flash_mla_with_kvcache.py`。Packed cache 按 656 B 读取，搬入 UB 时使用 672 B 行距以满足 32 B 对齐。反量化直接写入 BF16 NZ tile，QK、PV 和 sink 沿用现有计算流水。
 
 ### 2026-11-06 离线验证
 
