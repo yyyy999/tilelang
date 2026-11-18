@@ -1,0 +1,455 @@
+﻿"L1编号","L1名称","L2编号","L2名称","L3编号","L3名称","功能说明","约束与限制","举例","验证要点","源码与测试依据","A5支持状态","测试用例"
+"7","内存管理与 Layout（Memory Management & Layout）","7.1","存储层次与 Buffer 表达","7.1.01","UB、L1、L0 和 VF 局部 Buffer 分配","支持在 UB、L1、L0A/B/C 和 VF 局部存储中分配 Buffer。编译器为各类 Buffer 生成对应的地址空间或局部变量。UB 的分配大小可以在运行时计算。","1、T.alloc_shared 默认使用 shared.dyn。
+2、T.alloc_l1 和 T.alloc_l0a/b/c 分配到对应的 Cube 存储域。
+3、被访问的 Cube 视图需要可识别的 Fractal Layout。
+4、SIMT Fragment 按线程和局部槽位分布。
+5、T.simd.alloc_local 的每个元素存放一个向量值。
+6、AscendC 拒绝 scope 为 shared 的静态 UB 分配。
+7、VF 局部 Buffer 只能在所属作用域内访问。
+8、动态 Cube 分配和动态寄存器数组的支持范围待确认。","n = T.dynamic(""n"")
+ub = T.alloc_shared((T.ceildiv(n, 64) * 64,), ""float32"")
+# n=65 → UB 分配 128 个元素，T.copy(src, ub[:n]) 只拷贝 65 个。","检查生成代码的存储域、动态 UB 分配长度和有效拷贝范围。对 VF 局部槽用不同值连续写入，检查读回是否取得最近写入值。","tilelang/ascend/language/allocate.py:16  分配 API
+src/ascend/codegen/codegen_ascend.cc:3110  代码生成
+tilelang/language/allocate.py:67  通用分配
+tilelang/ascend/language/simd.py:243  SIMD 局部分配
+src/ascend/codegen/codegen_ascend.cc:3122  AscendC 静态 shared 拒绝
+testing/ascend/language/test_tilelang_ascend_dynamic_ub.py:10  动态 UB DSL
+examples/ascend/example_gemm.py:69  GEMM 示例
+testing/ascend/language/test_tilelang_ascend_simd_vld_brc.py:28  SIMD 广播用例
+testing/ascend/language/test_tilelang_ascend_simtvf_cast.py:18  SIMT cast","已实现，数值测试入口。本轮未执行测试。","testing/ascend/language/test_tilelang_ascend_dynamic_ub.py::test_dynamic_ub_allocation
+testing/ascend/analysis/test_ascend_vf_checker.py::test_vf_allocation_lifetime
+testing/ascend/language/test_tilelang_ascend_simd_vld_brc.py::test_ascend_simd_vld_brc_widens_past_buffer_width
+testing/ascend/language/test_tilelang_ascend_batched_nd2nz.py::test_batched_nd2nz_strides_and_transpose_device"
+"7","内存管理与 Layout（Memory Management & Layout）","7.1","存储层次与 Buffer 表达","7.1.02","AIC 与两个 AIV 共用 SS Buffer","支持在一个 MIX 核组中分配共享的标量 Buffer。编译器生成对 SS 地址空间的访问，同一块存储可分别通过 uint32 和 uint64 视图访问。","1、SS 用于 MIX 1:2 核组。
+2、分配形状须为静态正尺寸，元素类型为 uint32 或 uint64。
+3、SS 基址按 32 B 对齐。
+4、整个核组共用 3072 B，所有版本均计入容量。
+5、两个 AIV 的写入范围不得重叠。
+6、跨核读取前须按同步协议发布并等待。两个 AIV 直接传递数据时须显式同步。
+7、不同 SS 分配使用独立地址区间。
+8、SS 只支持标量访问，不支持 VF 访问、DMA 或原子操作。","words = T.alloc_ss((2,), ""uint32"")
+packed = T.view(words, shape=(1,), dtype=""uint64"")
+# 两个 AIV 写入 words[0]=100、words[1]=101 → AIC 在同步后读到 100 + (101 << 32)。","检查 SS 地址空间、分配对齐和容量诊断。运行时对照两个字段组成的 uint64 值，覆盖单槽和多槽的跨核读回。","tilelang/ascend/language/allocate.py:38  SS 分配
+src/ascend/codegen/codegen_ascend.cc:3151  SS 代码生成
+testing/ascend/language/test_tilelang_ascend_ss.py:198  发布与复用测试
+testing/ascend/language/test_tilelang_ascend_ss.py:14  共享字段 DSL
+testing/ascend/language/test_tilelang_ascend_ss.py:155  VF 拒绝","已实现，数值测试入口。本轮未执行测试。","testing/ascend/language/test_tilelang_ascend_ss.py::test_ss_codegen_materializes_versions_and_uses_mode4
+testing/ascend/language/test_tilelang_ascend_ss.py::test_ss_multiple_allocations_and_total_capacity
+testing/ascend/language/test_tilelang_ascend_ss.py::test_ss_fixed_versions_check_final_allocation_capacity
+testing/ascend/language/test_tilelang_ascend_ss.py::test_ss_peer_read_requires_explicit_synchronization
+testing/ascend/language/test_tilelang_ascend_ss.py::test_ss_vf_access_is_rejected
+testing/ascend/language/test_tilelang_ascend_ss.py::test_ss_publication_and_slot_reuse"
+"7","内存管理与 Layout（Memory Management & Layout）","7.1","存储层次与 Buffer 表达","7.1.03","L0 数据 Buffer 与 MX Scale Factor 绑定","支持给 L0A 或 L0B 的数据 Tile 绑定 Scale Factor（SF）句柄。装载 SF 时，编译器用数据 Tile 的地址找到 L0 中对应的 SF 槽位，并将 L1 中的 SF 切片换算成要装入的 scale pair 范围。","1、T.alloc_l0a_sf 或 T.alloc_l0b_sf 须绑定对应存储域的数据 Buffer，数据 Buffer 的末两维为矩阵轴。
+2、SF 可用 8 位 scale 或 16 位 scale pair 表示。
+3、L1 源须有可识别的 SF Layout。
+4、SF 起点和装载范围须按 scale 分组。
+5、数据和 SF 共用版本归属和地址规划。
+6、数据 Buffer 复用时也检查 SF 是否仍在使用。
+7、SF 句柄不能单独指定片上地址。
+8、SF 句柄绑定到错误数据 Buffer 时会报错。
+9、请求多版本时，若数据与 SF 找不到共同归属，会报错。
+10、无法证明装载范围在容量内时会拒绝，动态范围也须通过此检查。","sx0 = T.alloc_l0a_sf(x0)
+T.copy(sx1[:, :2], sx0)
+# 编译器用 x0 的地址定位 SF 槽，按 sx1 的 SF Layout 装入两个 scale pair。","在 IR 中检查 SF load 使用绑定数据的地址及正确的 scale 范围。对数据重载后继续使用原 SF 的场景，对比独立 CPU 缩放 GEMM 参考。","tilelang/ascend/language/allocate.py:114  SF 分配
+src/ascend/transform/auto_schedule.cc:1696  版本组检查
+src/ascend/op/copy.cc:955  SF Load lowering
+testing/ascend/language/test_tilelang_ascend_mx_sf_slots.py:15  SF 槽位测试
+testing/ascend/transform/test_ascend_lower_copy.py:565  SF 加载范围测试
+testing/ascend/language/test_tilelang_ascend_mx_sf_slots.py:59  SF 数值测试
+testing/ascend/transform/test_ascend_lower_gemm.py:126  错误绑定测试
+testing/ascend/language/test_tilelang_ascend_mx_sf_slots.py:24  SF 使用 DSL","已实现，有静态及数值测试入口。本轮未执行测试。","testing/ascend/language/test_tilelang_ascend_language_dialect.py::test_allocation_records_binding_without_a_consumer
+testing/ascend/transform/test_ascend_lower_copy.py::test_sf_copy_uses_bound_data_address_and_compact_pitch
+testing/ascend/transform/test_ascend_lower_copy.py::test_dynamic_sf_copy_requires_proven_data_capacity
+testing/ascend/transform/test_ascend_lower_gemm.py::test_mismatched_sf_binding_fails_before_layout_inference
+testing/ascend/language/test_tilelang_ascend_mx_sf_slots.py::test_scale_state_survives_data_reloads"
+"7","内存管理与 Layout（Memory Management & Layout）","7.1","存储层次与 Buffer 表达","7.1.04","带 stride 的 Buffer、指针重建与零拷贝视图","支持用 StridedTensor 描述带 stride 的 Buffer，也支持从已有指针重建 Buffer。view 和 reshape 共用源 Buffer 的 .data，访问时按新视图的形状、dtype 或 stride 计算地址。","1、从指针重建 Buffer 时，调用方须提供有效指针及正确的形状和 dtype。
+2、view 的源 elem_offset 必须为 0。
+3、view 的新旧逻辑 bit 总数必须相等，否则拒绝。
+4、不连续的源需要显式 stride，否则拒绝。
+5、显式 stride 的数量须等于目标维数，单位为目标 dtype 的元素。
+6、可证明为负的 stride 会被拒绝。
+7、使用显式 stride 时，调用方须保证 dtype 对齐、合并维度所需的连续性和底层容量。
+8、Cube 视图还须符合 7.2.01 的布局及物理大小要求。","out_i32 = T.view(out, shape=(ROWS, COLS_I32), dtype=T.int32,
+                 strides=(stride0 // 4, 1))
+# int8 行距 stride0 → int32 行距 stride0 // 4，共用 out.data。","检查视图共享 .data。用带行间空隙的目标和非零输入，检查数据写入正确位置且空隙保持原值。另检查 GM 指针表重建及非法 view 诊断。","tilelang/language/proxy.py:167  Tensor 构造
+tilelang/language/customize.py:63  view 与 reshape
+testing/ascend/language/test_tilelang_ascend_make_tensor_ptr.py:10  指针表测试
+testing/ascend/language/test_tilelang_ascend_dma_copy.py:43  运行时步长测试
+testing/ascend/language/test_tilelang_ascend_strided_view.py:35  带步长视图测试
+testing/python/language/test_tilelang_language_strided_view.py:48  view 约束检查","已实现，数值测试入口。本轮未执行测试。","testing/python/language/test_tilelang_language_strided_view.py::test_view_accepts_explicit_strides_for_rank_change
+testing/python/language/test_tilelang_language_strided_view.py::test_view_rejects_invalid_strided_views
+testing/ascend/language/test_tilelang_ascend_strided_view.py::test_strided_view_copy
+testing/ascend/language/test_tilelang_ascend_make_tensor_ptr.py::test_dma_from_pointer_tables"
+"7","内存管理与 Layout（Memory Management & Layout）","7.2","布局表达、推导与地址映射","7.2.01","Buffer Layout 注解与共享存储视图","支持用 Layout 指定逻辑坐标对应的物理坐标，用 Fragment 指定元素所在的线程和局部槽位。两个共用 .data 的 Buffer 视图可以有各自的布局，编译器按实际访问的视图解释地址。","1、T.annotate_layout 按 Buffer 视图指定映射。
+2、被访问的 Cube 视图各自需要规范的 Fractal Layout。
+3、共用分配的独立 Cube 视图须使用紧凑逻辑 stride 和零基偏移。
+4、共用分配的独立 Cube 视图须使用相同的访问 dtype。
+5、未注解视图按自身的访问推导布局，或按普通索引计算地址。
+6、布局注解不移动数据。
+7、Cube 别名补齐后的物理大小必须相等，否则拒绝。
+8、Fragment 别名的线程映射必须一致，冲突时会拒绝。","# 同一 owner.data 的两个 Buffer，各自声明 Layout
+owner: (i, j) → (i, j)
+view:  (i, j) → (j, i)
+# AscendLayoutInference 保留 layout_map 中的两个独立条目。","检查 layout_map 以 Buffer 身份保留各自映射，且 .data 仍相同。对照未注解视图及 Fragment 冲突场景。","src/layout/layout.h:45  Layout IR
+tilelang/ascend/language/annotations.py:33  视图布局契约
+testing/ascend/transform/test_ascend_buffer_view_layouts.py:176  视图数值用例
+testing/ascend/language/test_tilelang_ascend_reduce.py:19  Fragment 用例
+testing/ascend/transform/test_ascend_normalize_fractal_storage.py:183  Cube 视图测试
+testing/ascend/transform/test_ascend_normalize_fractal_storage.py:259  typed pointer 测试
+testing/ascend/transform/test_ascend_buffer_view_layouts.py:21  两视图布局测试
+testing/ascend/transform/test_ascend_buffer_view_layouts.py:138  所有权冲突测试","已实现，有静态及数值测试入口。本轮未执行测试。","testing/ascend/transform/test_ascend_buffer_view_layouts.py::test_explicit_layouts_remain_attached_to_each_view
+testing/ascend/transform/test_ascend_buffer_view_layouts.py::test_fragment_aliases_reject_conflicting_thread_ownership
+testing/ascend/transform/test_ascend_buffer_view_layouts.py::test_ub_view_reads_the_same_bytes_through_its_own_layout"
+"7","内存管理与 Layout（Memory Management & Layout）","7.2","布局表达、推导与地址映射","7.2.02","Cube Fractal Layout 与 Buffer 分配补齐","支持 NZ、MajorK、MajorMN、L0C、SF 和 Compact NZ 的坐标映射。对使用规范 Fractal Layout 的 Cube Buffer，编译器补齐矩阵维度，并把相关视图、访问区域和指针改到补齐后的存储上。","1、矩阵 Layout 至少有两维。
+2、普通 NZ 的 C0 为 256 除以元素位宽。
+3、L0C 使用 16×16 分块。
+4、Compact NZ 的列数须为常量且能整除 C0。
+5、Cube Buffer 只补齐末两维的矩阵轴，前导维保持原样。
+6、使用搬运指令时须满足该指令的 dtype 和区域要求。
+7、别名区域不能表示成所需的矩形区域，或有不允许的重叠时，编译器会拒绝。
+8、补齐增加的分配空间不会自动填值。","# BF16 L1，使用规范 NZ Layout
+AllocBuffer shape: (17, 15) → (32, 16)
+AllocBuffer shape: (2, 15, 15) → (2, 16, 16)
+# .data 不变。","检查布局类型、前向坐标、补齐后 shape 和 .data。对照已对齐 Buffer、非法别名区域，检查重复归一化的幂等性。","src/ascend/layout/ascend_layouts.cc:113  布局构造与识别
+src/ascend/transform/normalize_fractal_storage.cc:67  FractalStorageNormalizer
+testing/ascend/layout/test_tilelang_ascend_fractal_layout_tags.py:27  布局标签测试
+testing/ascend/layout/test_tilelang_ascend_padded_nz.py:45  Compact NZ 测试
+testing/ascend/transform/test_ascend_normalize_fractal_storage.py:17  分配补齐测试
+testing/ascend/transform/test_ascend_normalize_fractal_storage.py:280  区域拒绝用例","已实现，有静态及数值测试入口。本轮未执行测试。","testing/ascend/transform/test_ascend_normalize_fractal_storage.py::test_canonical_allocation_rounds_only_fractal_axes
+testing/ascend/transform/test_ascend_normalize_fractal_storage.py::test_non_rectangular_alias_region_is_rejected
+testing/ascend/layout/test_tilelang_ascend_fractal_layout_tags.py::test_canonical_layout_tags"
+"7","内存管理与 Layout（Memory Management & Layout）","7.2","布局表达、推导与地址映射","7.2.03","自动推导 Buffer Layout","编译器根据 GEMM、Copy 等算子和并行循环对 Buffer 的访问方式补全 Layout，并把已确定的布局用于访问同一 Buffer 的其他算子。存在多个合法方案时，编译器按所选的代价模型比较候选布局。","1、显式注解和算子强制要求的布局优先。
+2、GEMM 根据 A/B 的角色及转置参数选择 MajorK 或 MajorMN。
+3、Copy 根据源和目标的存储域及已有布局补充约束。
+4、tl.layout_cost_model 支持 register-count（默认）和 io-aware。
+5、仅共用 .data 的不同视图不会自动继承布局。
+6、显式布局与算子要求冲突且找不到合法方案时会报错。
+7、AscendC 上能稳定比较多个候选的输入，以及 io-aware 的排序和收益仍待确认。","# GEMM 使用 L1 或 L0 输入，transpose_A=False，transpose_B=True
+A Layout → MajorK
+B Layout → MajorK","检查 GEMM/Copy 的布局结果、传播约束与显式布局优先级。验收代价策略需另确定可产生多个合法候选的 AscendC 输入及预期排序。","src/ascend/transform/layout_inference.cc:663  AscendLayoutInference
+tilelang/ascend/op/gemm/gemm_mad.py:87  GEMM 转置与布局映射
+src/ascend/op/copy.cc:1095  Copy 推导
+src/ascend/transform/layout_inference.cc:1577  候选搜索
+src/transform/layout_inference/layout_cost_model.cc:1185  代价模型
+testing/ascend/transform/test_ascend_buffer_view_layouts.py:79  视图测试
+testing/ascend/language/test_tilelang_ascend_reduce.py:196  归约规划测试
+testing/python/transform/test_tilelang_transform_layout_inference.py:113  通用代价模型对照","已实现，布局推导有 AscendC 测试入口。io-aware 在 A5 上的候选排序与效果待确认。本轮未执行测试。","testing/ascend/transform/test_ascend_buffer_view_layouts.py::test_copy_defaults_do_not_inherit_another_view_layout
+testing/ascend/transform/test_ascend_buffer_view_layouts.py::test_copy_default_is_independent_of_distinct_alias_layouts"
+"7","内存管理与 Layout（Memory Management & Layout）","7.2","布局表达、推导与地址映射","7.2.04","Buffer 索引和访问指针的物理地址计算","编译器按 Buffer 视图的 Layout 改写 Load、Store 和 T.access_ptr 的逻辑坐标，再结合 stride 和 elem_offset 计算展平后的偏移。指针 Lowering 保留访问长度和读写掩码。","1、T.access_ptr 通过 BufferLoad 指定访问视图和基址。
+2、Layout 的输出形状须能确定，映射后的地址须可表示。
+3、偏移以访问视图的元素为单位，必要时使用更宽的索引类型。
+4、同一存储有多个布局时，缺少视图信息且无法选定映射的裸指针会被相关路径拒绝。
+5、各硬件描述符支持的动态偏移位宽待确认。","# 两个 typed access pointer，共用一个分配基址
+owner[3,5] → 元素偏移 3*16+5 = 53
+view[3,5]  → 元素偏移 5*8+3 = 43","在 IR 中检查两个指针引用同一底层分配，分别使用预期偏移、extent 和读写掩码。另检查展平时大偏移的位宽。","src/ascend/transform/lower_tile_op.cc:52  Ascend 地址重映射
+src/transform/lower_access_ptr.cc:83  LowerAccessPtr
+src/transform/flatten_buffer.cc:154  FlattenBuffer
+testing/ascend/transform/test_ascend_buffer_view_layouts.py:159  typed pointer 测试
+testing/python/transform/test_tilelang_transform_flatten_buffer.py:18  通用大偏移断言
+testing/ascend/transform/test_ascend_normalize_fractal_storage.py:259  裸指针测试","已实现，静态测试入口。本轮未执行测试。","testing/ascend/transform/test_ascend_buffer_view_layouts.py::test_typed_pointers_use_each_view_layout_and_one_storage
+testing/ascend/transform/test_ascend_normalize_fractal_storage.py::test_distinct_cube_layouts_require_typed_pointers
+testing/python/transform/test_tilelang_transform_flatten_buffer.py::test_flatten_buffer_promotes_tvm_access_ptr_offset_to_int64"
+"7","内存管理与 Layout（Memory Management & Layout）","7.2","布局表达、推导与地址映射","7.2.05","FP4 两元素打包与字节地址换算","编译器把以 FP4 元素计数的底层存储改为 float4_e2m1fnx2，每字节存两个 FP4 元素。分配尺寸、适用的 stride、索引、偏移和指针访问长度随之换算。","1、打包重写在 Buffer 展平后、合并分配前执行。
+2、FP4 按整字节访问，相关 DMA 行宽也须为整字节。
+3、基于非 FP4 底层 Buffer 的 FP4 视图使用独立的地址处理。
+4、参与换算的常量必须为偶数，奇数尺寸、偏移或长度会被拒绝。
+5、Pass 对符号表达式直接除以二，动态偶数性须结合具体路径确认。","# 真实 FP4 Buffer，按 Pass 规则展开
+shape (N,), float4_e2m1fn → shape (N/2,), float4_e2m1fnx2
+# 偶数 access_ptr offset=2*p, extent=2*n → offset=p, extent=n。","检查类型及 shape、offset、extent 只换算一次。验证奇数常量诊断、往返字节相等，以及字节底层视图与原生 FP4 的数值一致性。","src/ascend/transform/rewrite_fp4_to_fp4x2.cc:43  FP4 存储重写
+testing/ascend/language/test_tilelang_ascend_dma_copy.py:105  DMA 往返
+testing/ascend/layout/test_tilelang_ascend_l0_gemm_matrix.py:119  GEMM 用例
+testing/ascend/language/test_tilelang_ascend_dma_copy.py:87  FP4 原始 DSL
+testing/ascend/transform/test_ascend_lower_copy.py:155  整字节行宽检查","已实现，数值测试入口。本轮未执行测试。","testing/ascend/transform/test_ascend_lower_copy.py::test_packed_fp4_rows_require_whole_bytes
+testing/ascend/language/test_tilelang_ascend_dma_copy.py::test_gm2ub2gm_fp4_copy
+testing/ascend/layout/test_tilelang_ascend_l0_gemm_matrix.py::test_packed_fp4_blockscaled_gemm"
+"7","内存管理与 Layout（Memory Management & Layout）","7.3","布局转换与 Cube Tile 映射","7.3.01","GM→L1 的 ND/DN 转 NZ","支持在 GM→L1 拷贝时将 ND 或 DN 矩阵排成 NZ。编译器根据转置参数、源 stride 和目标 Layout 计算每个矩阵及批次在 L1 中的位置。","1、transpose=True 时交换两条逻辑矩阵轴。
+2、批量路径需要能表示为批、行、列的区域，并使用规范的矩阵 Layout。
+3、源批 stride 和 L1 目标矩阵的物理间距分别计算。
+4、FP4 输入按打包字节处理。
+5、映射后的源区域须能放入目标，目标不足时相关路径会拒绝。
+6、无法规约为支持的矩阵或批量矩阵几何，或列 stride 无法表示时，相关路径会拒绝。
+7、通用传输边界裁剪和指令发射由 DMA 特性负责。","# GM 中 4 个 24×128 BF16 矩阵，L1 矩阵槽为 32×128
+T.copy(source[:, :24, :128], target[:, :24, :])
+# L1 NZ 批间距 → 32*128*2 = 8192 B。","检查转置前后轴对应、源 stride、目标批间距及实际 NZ 落点。用带批 stride 的数据验证读回，并覆盖目标批次不足的诊断。","src/ascend/op/copy.cc:548  GM→L1 lowering
+src/ascend/op/ascend_mte_plan.h:300  批量形状规约
+testing/ascend/language/test_tilelang_ascend_batched_nd2nz.py:249  批量数值测试
+testing/ascend/language/test_tilelang_ascend_batched_nd2nz.py:29  批量描述符断言
+testing/ascend/language/test_tilelang_ascend_batched_nd2nz.py:132  目标批次拒绝","已实现，数值测试入口。本轮未执行测试。","testing/ascend/language/test_tilelang_ascend_batched_nd2nz.py::test_batched_nd2nz_descriptor
+testing/ascend/language/test_tilelang_ascend_batched_nd2nz.py::test_batched_nd2nz_rejects_smaller_destination
+testing/ascend/language/test_tilelang_ascend_batched_nd2nz.py::test_batched_nd2nz_strides_and_transpose_device"
+"7","内存管理与 Layout（Memory Management & Layout）","7.3","布局转换与 Cube Tile 映射","7.3.02","UB 转 Compact NZ 与按 pitch 写入 L1","支持将连续的 UB 数据排成 Compact NZ，也支持把已有 NZ 的一部分按两端的实际 pitch 写入 L1。需要临时转换时，编译器先用 SIMD scatter 将数据写入带补齐行的临时 UB，再拷入 L1。","1、scatter 支持 float16、bfloat16 和 float32。
+2、scatter 的行数和列数须为常量，列范围须按 C0 对齐。
+3、UB→L1 的连续源须从 32 B 对齐的地址开始，并覆盖完整行。
+4、UB→L1 目标须使用规范 MajorK Layout。
+5、已有 NZ 按源和目标完整布局的 pitch 计算地址。
+6、typed pointer 路径检查访问跨度和容量。裸指针由调用方保证容量和对齐。
+7、SIMT VF 内跳过这项 NZ 转换。
+8、已有 NZ 的 post-copy 不支持同时转换 dtype。
+9、非法 stride、未对齐或超容量时会报对应错误。
+10、post-copy 的指令发射由 DMA 特性负责。","# UB 源 16×128 BF16，目标为带 Compact NZ Layout 的 FP32 UB
+T.copy(src, dst[:16, :])
+# IR 中的 Copy → tl.ascend_nd2nz_scatter，rows=16、cols=128。","检查 scatter 的逻辑尺寸和包含 padding 的物理跨度，检查已排布 NZ 的双端 pitch。对照不同分段数的数值结果，并检查不合法区域和 SIMT 跳过分支。","src/ascend/transform/insert_nd2nz.cc:37  InsertNd2Nz
+src/ascend/layout/ascend_layouts.cc:413  MakeStridedSlice
+src/ascend/transform/insert_nd2nz.cc:455  post-copy 校验
+testing/ascend/transform/test_ascend_insert_nd2nz.py:39  scatter IR 测试
+testing/ascend/layout/test_tilelang_ascend_nd2nz_matmul.py:80  ND2NZ matmul
+testing/ascend/layout/test_tilelang_ascend_padded_nz.py:95  分段 NZ 测试
+testing/ascend/transform/test_ascend_insert_nd2nz.py:79  跨 pitch IR 断言
+testing/ascend/layout/test_tilelang_ascend_padded_nz.py:116  预排布分段测试","已实现，静态及数值测试入口。本轮未执行测试。","testing/ascend/transform/test_ascend_insert_nd2nz.py::test_scatter_regions_and_vf_boundary
+testing/ascend/transform/test_ascend_insert_nd2nz.py::test_partial_nz_copy_uses_complete_storage_pitches
+testing/ascend/transform/test_ascend_insert_nd2nz.py::test_invalid_partial_nz_regions
+testing/ascend/layout/test_tilelang_ascend_padded_nz.py::test_partial_copies_keep_full_buffer_pitch"
+"7","内存管理与 Layout（Memory Management & Layout）","7.3","布局转换与 Cube Tile 映射","7.3.03","L1→L0 分片装入与 MAD 读取范围","支持将 L1 的多个矩阵切片装入同一个 L0 Tile，再由 MAD 读取组装后的矩阵。Copy 根据源和目标 Layout 计算 Fractal 起点、转置和 pitch。MAD 根据 A、B、C 的实际区域确定 M/N/K，底层 Buffer 可以分配得更大。","1、单次紧凑装入默认按目标区域计算 pitch。
+2、分片装入时，l0_pitch 指定完整 Tile 的 Fractal 步长，例如 L0A 使用 ceildiv(M, 16)。
+3、MAD 的 A、B、C 区域末两维须从零开始，不支持直接读取非零起点的 L0 子块。
+4、MAD 的 A、B、C 区域的对应 M/N/K 须匹配。
+5、装入使用的 pitch 须与 MAD 对完整 Tile 的读取方式一致。
+6、非零矩阵写入起点须提供显式 l0_pitch，否则拒绝装入。
+7、分片须按 Fractal 对齐并放得进 L0 分配，否则拒绝装入。
+8、转置装入还须符合硬件分组要求。
+9、MTE1 指令发射归 DMA，MAD 执行性能归 Cube 性能。","# m-tail，L0A shape=(64,64)，effective_m=40，padded_m=48
+T.copy(a_l1[:16, :], a[:16, :], l0_pitch=T.ceildiv(effective_m, 16))
+T.copy(a_l1[16:padded_m, :], a[16:padded_m, :], l0_pitch=T.ceildiv(effective_m, 16))
+# 两段共用 pitch=3，MAD 有效 M/N/K=40/64/64。","检查分片 Lowering 的物理起点、pitch 和 MAD 的有效 M/N/K，确认底层分配未缩小。对比分片 GEMM 与 CPU 参考，并检查非法 pitch 和未对齐分片诊断。","src/ascend/op/copy.cc:191  L0 区域规划
+src/ascend/op/copy.cc:653  L0 Load lowering
+tilelang/ascend/op/gemm/gemm_mad.py:140  L0 区域推导
+testing/ascend/transform/test_ascend_lower_copy.py:268  pitch 断言
+testing/ascend/layout/test_ascend_partial_l0_copy.py:88  分段装入数值测试
+testing/ascend/transform/test_ascend_lower_gemm.py:56  MAD 有效尺寸断言
+testing/ascend/language/test_tilelang_ascend_l0_gemm_effective_k.py:22  有效 K 用例
+testing/ascend/layout/test_ascend_partial_l0_copy.py:39  分片 DSL
+testing/ascend/transform/test_ascend_lower_copy.py:331  分片诊断测试","已实现，静态及数值测试入口。本轮未执行测试。","testing/ascend/transform/test_ascend_lower_copy.py::test_partial_l0_copy_uses_full_pitch_and_mapped_destination_origin
+testing/ascend/transform/test_ascend_lower_copy.py::test_partial_l0_copy_rejects_misalignment_and_offset_overflow
+testing/ascend/transform/test_ascend_lower_gemm.py::test_mad_uses_region_geometry_without_shrinking_storage
+testing/ascend/layout/test_ascend_partial_l0_copy.py::test_partial_copies_feed_full_gemm_across_versions"
+"7","内存管理与 Layout（Memory Management & Layout）","7.3","布局转换与 Cube Tile 映射","7.3.04","FixPipe 写回 ND/NZ 布局与 UB 写入对齐","支持通过 FixPipe 从 L0C 写回累加结果，按目标 ND stride 或 NZ panel 计算写入地址。对符合条件的 ND UB 写回，编译器按 32 B 扩宽实际写入范围，并将该范围用于后续访问分析。","1、L0C 的源 pitch 默认按紧凑区域计算，也可显式指定。
+2、NZ UB 目标须使用规范 Fractal Layout 和可表示的紧凑逻辑 stride。
+3、NZ 的列起点和宽度须对齐完整 panel，非法 panel 会被拒绝。
+4、ND UB 扩宽要求内轴连续，且源和目标都能容纳扩宽后的范围。
+5、空区域、NZ 输出和 N-split 跳过 ND 扩宽。
+6、无法证明内轴连续或双端容量足够时，保留原范围并告警。
+7、UB 行 stride 不能证明为 32 B 的倍数时会告警。
+8、FixPipe 指令模式、转换控制和双目标写入的硬件路由归 DMA。","# L0C shape=(128,16)，GM shape=(200,16)
+# 写入 GM[128:200, :] → FixPipe M=72、N=16。
+# L0C 源 pitch 参数仍为 128，目标 ND 行 stride 为 16。","检查 ND/NZ 的目标偏移、源 pitch、目标 stride 或 panel pitch。检查 ND 扩宽后描述符的实际写区、不可扩宽分支及 NZ 数值读回。","src/ascend/op/copy.cc:682  FixPipe lowering
+src/ascend/transform/normalize_fractal_storage.cc:325  FixPipe 区域归一化
+testing/ascend/transform/test_ascend_lower_copy.py:192  GM/NZ pitch 断言
+testing/ascend/layout/test_ascend_fractal_storage_integration.py:71  NZ 逻辑读回数值测试
+testing/ascend/transform/test_ascend_normalize_fractal_storage.py:389  对齐及失败用例
+testing/ascend/transform/test_ascend_lower_copy.py:222  NZ panel 拒绝用例
+testing/ascend/transform/test_ascend_normalize_fractal_storage.py:494  扩写宽度断言","已实现，有静态及数值测试入口。本轮未执行测试。","testing/ascend/transform/test_ascend_lower_copy.py::test_fix_nz_uses_physical_panel_pitch_and_slice_origin
+testing/ascend/transform/test_ascend_lower_copy.py::test_fix_nz_rejects_partial_column_panels
+testing/ascend/transform/test_ascend_normalize_fractal_storage.py::test_l0c_to_ub_pads_the_hardware_transfer_width
+testing/ascend/transform/test_ascend_normalize_fractal_storage.py::test_l0c_to_ub_unknown_capacity_keeps_the_original_region
+testing/ascend/layout/test_ascend_fractal_storage_integration.py::test_nz_fixpipe_logical_reads_npu"
+"7","内存管理与 Layout（Memory Management & Layout）","7.4","访问合法化与初始化","7.4.01","Buffer 负索引转换与越界保护","支持把合法负索引换算为非负索引。对可以分析的普通 Load 和 Store，编译器为可能越界的读提供安全值，并只在索引有效时执行受保护的写入。","1、负索引按所在轴的长度换算。
+2、安全访存检查要求能识别 Buffer 和访问表达式。
+3、已证明合法的访问无需额外 guard。
+4、可用 tl.disable_safe_memory_legalize 关闭安全访存保护。
+5、执行路径可达且负常量索引超出轴长时会报错。
+6、符号索引范围无法证明时，需结合下游保护判断。
+7、不透明指针可能无法恢复访问范围。
+8、某些 Store 的值已是 IfThenElse 时，会告警并跳过额外保护。","# A.shape = (1024,)
+value = A[-1] → value = A[1023]  # 负索引归一化
+# 长度为 8 的 A 上，可达访问 A[-10] → 拒绝。","在 IR 中检查等价的正索引、越界读的安全值和写入 guard。对比合法访问、超范围负常量及关闭安全访存开关的结果。","src/transform/legalize_negative_index.cc:316  LegalizeNegativeIndex
+src/transform/legalize_safe_memory_access.cc:442  安全访问重写
+testing/python/transform/test_tilelang_transform_legalize_negative_index.py:17  负索引前后 IR
+testing/python/transform/test_tilelang_transform_legalize_safe_memory_access.py:635  通用 pointer 保护测试
+testing/python/transform/test_tilelang_transform_legalize_negative_index.py:590  超范围常量测试
+testing/python/transform/test_tilelang_transform_legalize_safe_memory_access.py:655  普通访问 guard 测试","已接入 AscendC，通用 Pass 有 IR 测试入口。A5 专项验证待确认。本轮未执行测试。","testing/python/transform/test_tilelang_transform_legalize_negative_index.py::test_buffer_load_negative_index_legalized
+testing/python/transform/test_tilelang_transform_legalize_negative_index.py::test_out_of_range_constant_negative_index_is_rejected
+testing/python/transform/test_tilelang_transform_legalize_safe_memory_access.py::test_dynamic_index_load_store_conditions_are_combined"
+"7","内存管理与 Layout（Memory Management & Layout）","7.4","访问合法化与初始化","7.4.02","GM→L1 拷贝后的矩阵尾部补零","当 GM→L1 拷贝留下下游计算需要读取的矩阵尾部时，编译器生成 fill 将对应区域置零。普通 Fractal 按目标矩阵轴处理，MX 操作数按有效 K 处理。","1、普通 Fractal 路径只对越界裁剪截掉的尾部补零。单纯扩大 L1 分配不触发填充。
+2、普通路径按 MajorK/MajorMN 的目标轴确定 fill 区域。另一条矩阵轴未覆盖完整时，不扩展 fill。
+3、批量拷贝只填有效批次。无效批次保持原值。
+4、MX FP8/FP4 路径要求目标矩阵起点为零。
+5、MX 的分配 K 须为 64 的倍数，不满足时会报错。
+6、MX MajorMN 还要求 M/N 按 C0 对齐，不满足时会报错。
+7、MX MajorK 只补 DMA 按 C0 补齐后仍未写入的 K 尾部。
+8、没有待补的尾部时跳过 fill。
+9、通用传输裁剪归 DMA。","# MX FP4，M/N=64，MajorMN，实际 K=34，目标 K 分配对齐到 64
+GM→L1 Copy（有效 K=34） → Copy + T.fill(L1[34:64, :], 0)
+# 依据测试断言表示目标区域，K 为倒数第二轴。","检查 fill 值、目标轴、起点、extent 及其与 Copy、消费者的先后关系。覆盖正交轴不完整、无尾区、有效批外和 MX 分配 K 不合规的分支。","src/ascend/transform/insert_oob_padding.cc:78  L1 尾区生成
+src/ascend/transform/insert_oob_padding.cc:257  MakeMxKTailFill
+testing/ascend/transform/test_ascend_copy_bounds.py:41  区域测试
+testing/ascend/language/test_tilelang_ascend_copy_oob.py:56  尾块 GEMM 数值测试
+testing/ascend/transform/test_ascend_copy_bounds.py:182  范围断言
+testing/ascend/language/test_tilelang_ascend_copy_oob.py:89  动态 K 数值测试
+testing/ascend/transform/test_ascend_copy_bounds.py:212  MX 不完整分组诊断","已实现，静态及数值测试入口。本轮未执行测试。","testing/ascend/transform/test_ascend_copy_bounds.py::test_clamped_copy_and_padding_use_destination_axes
+testing/ascend/transform/test_ascend_copy_bounds.py::test_in_bounds_copy_does_not_fill_extra_storage
+testing/ascend/transform/test_ascend_copy_bounds.py::test_mx_copy_pads_only_the_unwritten_k_tail
+testing/ascend/language/test_tilelang_ascend_copy_oob.py::test_gemm_copy_tails_across_all_matrix_axes"
+"7","内存管理与 Layout（Memory Management & Layout）","7.4","访问合法化与初始化","7.4.03","UB/L1 填充与未初始化读取告警","支持用 fill 或 clear 初始化片上 Buffer。UB 可填常量或运行时标量，L1 按 Fractal Layout 找到待清零的区域。检测到未初始化的片上读取时，编译器发出警告。","1、UB 的 SIMD fill 要求填充区连续。
+2、SIMD fill 基址须按 32 B 对齐，未对齐时会报错。
+3、SIMD fill 元素数须为向量寄存器元素数的倍数。
+4、L1 fill 一次处理一个矩阵，目标须使用 MajorK/MajorMN Layout。
+5、L1 fill 的范围须按 C0 对齐。
+6、L1 fill 使用位宽不超过 16 或等于 32 的标量 dtype。
+7、读前检查默认启用，可用 tl.disable_buffer_init_check 关闭。
+8、L1 fill 只接受零。
+9、未初始化读取告警不会替 Buffer 写入初值。
+10、复杂别名和局部写入场景的诊断范围待确认。","T.fill(buf, x[i])
+T.copy(buf, out[i, :])
+# out[i, j] = x[i]，对本行所有 j 成立。","检查写入范围、填充值和邻近区域。分别检查未初始化累加器的警告、正常初始化或关闭诊断时的行为，以及 L1 非零 fill 和 SIMD 未对齐诊断。","src/ascend/op/fill.cc:49  L1 fill lowering
+src/ascend/transform/ascend_simdvf_lower_parallel.cc:571  SIMD fill lowering
+src/transform/verify_buffer_init.cc:393  VerifyBufferInit
+tilelang/ascend/pipeline.py:86  Ascend 接入点
+testing/ascend/language/test_tilelang_ascend_fill.py:51  UB 数值用例
+testing/ascend/language/simdvf/test_simdvf_fill.py:40  SIMD fill 测试
+testing/python/transform/test_tilelang_transform_verify_buffer_init.py:64  通用诊断用例
+testing/ascend/language/simdvf/test_simdvf_fill.py:82  SIMD 非对齐测试
+testing/ascend/language/test_tilelang_ascend_fill.py:27  UB 填充 DSL","已实现，显式初始化有数值测试入口，读前诊断有通用 IR 测试入口。读前诊断的 AscendC 专项覆盖待确认。本轮未执行测试。","testing/ascend/language/test_tilelang_ascend_fill.py::test_scalar_fill_out_of_vf
+testing/ascend/transform/test_ascend_copy_bounds.py::test_clamped_copy_and_padding_use_destination_axes
+testing/python/transform/test_tilelang_transform_verify_buffer_init.py::test_warns_when_accumulator_is_uninitialized
+testing/ascend/language/simdvf/test_simdvf_fill.py::test_simdvf_fill_misaligned_subregion_rejected"
+"7","内存管理与 Layout（Memory Management & Layout）","7.4","访问合法化与初始化","7.4.04","SIMD/SIMT 的 Buffer 访问检查","编译器检查 SIMD VF 和 SIMT VF 中的 Load、Store 和 Copy 是否能访问指定存储域，也会检查 VF 局部 Buffer 的使用范围，以及对外部局部标量的写入方式。","1、SIMD VF 禁止直接对 GM Buffer 做 Load、Store 或 Copy。对应的 SIMT VF 访问可通过这项存储域检查。
+2、在 VF 内部分配的 Buffer 只能在所属作用域内访问。
+3、VF 外的 Copy 源、目标 dtype 不同时会被拒绝，L0C 源的写回由 FixPipe 路径处理。
+4、在 VF 内写入外部 local.var 若需要捕获指针，该写入会被拒绝。
+5、违规访问会报错，编译器不会自动插入搬运或移动分配。","# 相同访问位于两种 VF 内，以下为 VFChecker 结果
+ub[0] = A[0]  # A 位于 GM
+SIMT_VF → 接受；SIMD_VF → 拒绝 GM Load。","构造相同访问的 SIMD/SIMT 对照，检查接受结果和具体诊断。另检查 VF 局部 Buffer 逃逸和外部局部标量写入。","tilelang/ascend/analysis/vf_checker.py:90  VFChecker
+testing/ascend/analysis/test_ascend_vf_checker.py:22  VF 存储域测试
+testing/ascend/analysis/test_ascend_vf_checker.py:68  VF 分配生命周期检查","已实现，静态测试入口。本轮未执行测试。","testing/ascend/analysis/test_ascend_vf_checker.py::test_global_memory_access_depends_on_vf_kind
+testing/ascend/analysis/test_ascend_vf_checker.py::test_vf_allocation_lifetime
+testing/ascend/analysis/test_ascend_vf_checker.py::test_local_scalar_writes_cannot_require_pointer_capture
+testing/ascend/analysis/test_ascend_vf_checker.py::test_copy_dtype_contract"
+"7","内存管理与 Layout（Memory Management & Layout）","7.5","物理存储规划、容量与复用","7.5.01","自动多缓冲的片上容量预算","编译器在选择多缓冲版本数时，按物理存储池计算还能使用多少空间。它先计入固定分配和固定版本的占用，再用剩余空间限制自动选择的版本数。","1、UB 容量预算为 248 KiB，启用 SIMT 时预留 32 KiB。
+2、L1 预算为 512 KiB，L0A 和 L0B 各 64 KiB，L0C 为 256 KiB，SS 为 3 KiB。
+3、公共 UB 计入两个 AIV 的预算，私有 UB 分开计算。
+4、SS 按核组合计。
+5、仅在有自动版本变量的池中预检每个候选 Buffer 至少保留一槽是否放得下。
+6、T.annotate_unlimit_memory 只调整调度预算，显式地址的物理容量检查仍生效。
+7、大小表达式无法化简成常量时，调度预算按 0 B 计。
+8、固定分配的大小直接相加可能高估复用后的占用。
+9、动态形状和普通合并分配的最终峰值校验待确认。","# 两个 AIV 各用 96×uint64 的 SS Buffer，各 2 个版本
+2 * 96 * 8 * 2 = 3072 B → 共享池恰满，保留两版本。
+# 同一 stage 约束下，96 → 100 → 计划不可行。","固定 stage 和访问关系，检查恰满预算时的版本数，以及超预算时的容量或不可行诊断。显式地址及最终物理大小由 7.5.05 单独检查。","src/ascend/target_utils.h:17  A5 容量常量
+src/ascend/transform/auto_schedule.cc:1049  调度预算实现
+testing/ascend/auto_schedule/test_schedule_units.py:216  SS 池测试","部分支持。静态版本预算有 IR 测试入口，动态及普通分配的最终峰值校验待确认。本轮未执行测试。","testing/ascend/auto_schedule/test_schedule_units.py::test_ss_versions_share_capacity_across_aivs"
+"7","内存管理与 Layout（Memory Management & Layout）","7.5","物理存储规划、容量与复用","7.5.02","Buffer 实际读写范围分析","编译器根据 Buffer 的 Layout、stride、指针信息和搬运参数，计算一次访问实际涉及的物理位置。对于写入，分析会分别记录可能写到的位置和能证明一定被覆盖的位置，供依赖分析和 Buffer 复用使用。","1、搬运写入范围包含硬件补齐的位置，按物理行和 stride 计算。
+2、只有确定被覆盖的位置才能据此判断旧值可以丢弃。
+3、复用 Buffer 还要证明此前的访问已经完成。
+4、裸指针传出、运行时索引或布局信息使范围无法确定时，编译器保守地保留相关数据，并可能放弃复用。","view[31] = 100.0
+T.copy(A, view[:30], data_select=True)  # 30 个 FP32 元素
+# stride=1 → 补齐覆盖 view[31]；stride=16 → view[31] 的旧值仍需保留。","固定访问完成关系，仅改变 stride、padding 或区域。检查覆盖到 view[31] 时是否授予复用许可，以及可变地址场景是否保守保留数据。","src/ascend/transform/auto_schedule/memory_detector.h:97  MemoryDetector
+testing/ascend/auto_schedule/test_access_footprints.py:575  覆盖测试
+testing/ascend/language/test_tilelang_ascend_buffer_reuse.py:137  跨视图指针数值用例","已实现，静态及数值测试入口。本轮未执行测试。","testing/ascend/auto_schedule/test_access_footprints.py::test_padded_copy_coverage_uses_physical_rows
+testing/ascend/auto_schedule/test_access_footprints.py::test_address_of_escape_keeps_unknown_read_footprint_live
+testing/ascend/language/test_tilelang_ascend_buffer_reuse.py::test_pointer_reads_physical_elements_outside_the_logical_view"
+"7","内存管理与 Layout（Memory Management & Layout）","7.5","物理存储规划、容量与复用","7.5.03","Buffer 复用条件与生命周期检查","编译器判断两个 Buffer 能否共用分配。它检查前一个 Buffer 的访问是否完成，以及原来的数据后续是否还会被读取。自动调度路径结合循环和作用域分析，关闭自动调度时则从 Lowering 后的 IR 读取显式同步信息。","1、允许复用前须证明前一个 Buffer 的相关访问已完成。
+2、两份数据需要保留的时间不得重叠。
+3、检查时计入绑定的 SF、后续循环还会读取的旧值和跨作用域的访问。
+4、可用 tl.disable_shared_memory_reuse 关闭复用。
+5、同一 PIPE 的发射顺序不足以证明访问已完成。
+6、缺少访问完成信息、后续仍须使用旧数据或控制流无法分析时，保留独立分配。
+7、复杂手工同步协议的分析范围待确认。","# 手工协议 IR 中的操作顺序与分析结果
+DMA 读 a → MTE3_MTE2 成对 set/wait → 写 b：允许 a、b 复用。
+DMA 读 a → 仅 wait 或无完成事件 → 写 b：不授予复用许可。","固定访问范围，仅改变完成边，检查别名许可是否随之变化。实际字节偏移由合并分配用例验收。","src/ascend/transform/auto_schedule/buffer_alias_analysis.h:1508  BufferAliasAnalyzer
+src/ascend/transform/insert_sync.cc:921  复用分析接入点
+src/ascend/transform/infer_buffer_aliases.cc:145  InferBufferAliases
+tilelang/ascend/pipeline.py:192  流水线接入
+testing/ascend/auto_schedule/test_buffer_lifetimes.py:754  同 PIPE 发射顺序对照
+testing/ascend/language/test_tilelang_ascend_buffer_reuse.py:14  复用数值用例
+testing/ascend/transform/test_ascend_buffer_aliases.py:37  完成边测试
+testing/ascend/auto_schedule/test_buffer_lifetimes.py:941  SF 生命周期","已实现，有静态及数值测试入口。本轮未执行测试。","testing/ascend/transform/test_ascend_buffer_aliases.py::test_dma_read_requires_a_completion_edge_before_reuse
+testing/ascend/auto_schedule/test_buffer_lifetimes.py::test_same_pipe_issue_order_does_not_allow_dma_alias
+testing/ascend/language/test_tilelang_ascend_buffer_reuse.py::test_dma_tail_is_not_overwritten_by_an_earlier_allocation"
+"7","内存管理与 Layout（Memory Management & Layout）","7.5","物理存储规划、容量与复用","7.5.04","片上 Buffer 合并分配与 AIV 私有 UB 地址规划","编译器按 UB、L1、L0 等存储池合并 Buffer 分配，为每个 Buffer 计算字节偏移，并改写 Load、Store 和指针访问。对 UB，两个 AIV 都为公共 Buffer 预留空间，再分别安排各自的私有 Buffer。","1、合并分配时，UB 和 SS 按 32 B 对齐，L1、L0A、L0B 按 512 B 对齐，L0C 按 1024 B 对齐。
+2、同一物理池内，开启复用且已有复用许可的 Buffer 可以占用重叠区间。否则分开分配。
+3、两个 AIV 的私有 UB 位于不同地址空间，可以使用相同的数字偏移。
+4、各 SS 分配保持独立。
+5、普通合并分配的最终容量校验仍须按存储池和动态形状分别确认。","# 公共 UB 128 B，AIV0/AIV1 私有 UB 分别为 512/256 B
+私有区起点 → 各自 UB 偏移 128 B
+合并分配大小 → 128 + max(512, 256) = 640 B","检查合并分配大小、各 Buffer 对齐、访问偏移和冲突区间。对照关闭复用及 AIV 私有区，按区间关系验收。","src/ascend/transform/merge_ub_common.h:78  对齐及分配重写
+src/ascend/transform/merge_ub_allocations.cc:610  多池规划
+testing/ascend/transform/test_ascend_merge_allocations.py:34  UB/SS 合并测试
+testing/ascend/transform/test_ascend_merge_allocations.py:11  冲突组与关闭复用","已实现，静态及复用数值测试入口。本轮未执行测试。","testing/ascend/transform/test_ascend_merge_allocations.py::test_subcore_ub_allocations_have_independent_address_spaces
+testing/ascend/transform/test_ascend_merge_allocations.py::test_packer_respects_complete_allocation_conflicts
+testing/ascend/transform/test_ascend_merge_allocations.py::test_ss_allocations_remain_disjoint_and_aligned_even_with_alias_contract"
+"7","内存管理与 Layout（Memory Management & Layout）","7.5","物理存储规划、容量与复用","7.5.05","片上 Buffer 固定地址与容量检查","支持为片上 Buffer 指定起始字节地址。编译器先预留指定区间，再为同池未指定地址的 Buffer 找到第一个足够大且满足对齐的空闲区间，最后检查物理占用是否越界或重叠。","1、指定片上地址要求开启自动调度。
+2、每个指定地址的 Buffer 须显式给出正版本数，单槽也要写 1。缺少版本数会被拒绝。
+3、支持 shared.dyn、shared.l1、shared.l0a/b/c 和 shared.ss。
+4、起始地址须为非负字节地址且满足对应存储域的对齐要求，未对齐时会被拒绝。
+5、物理大小须为正的常量，动态大小会被拒绝。
+6、容量检查计入布局补齐、所有槽位及 SIMT UB 预留。区间超出容量时会被拒绝。
+7、同一存储的别名共用地址。SF 随绑定的数据 Buffer 分配。
+8、指定地址的池不做生命周期复用。同一物理池的区间即使使用时间不重叠也不得相交。","# L1 IR fixture，alignment=512 B，三个分配依次为 1024/512/512 B
+{fixed.data: 512} → large@1024，fixed@512，small@0
+# 总分配 2048 B，偏移单位为字节。","检查指定地址、未指定 Buffer 的补放、物理容量恰满和超限。单独覆盖 padding 或多版本展开后发生重叠的场景。","tilelang/ascend/language/annotations.py:50  地址注解
+src/ascend/transform/merge_ub_allocations.cc:415  BuildPlacedMemoryPlan
+testing/ascend/transform/test_ascend_buffer_addresses.py:73  物理区间测试
+testing/ascend/auto_schedule/test_schedule_integration.py:1168  全链路测试
+testing/ascend/auto_schedule/test_buffer_version_annotations.py:72  地址与版本数约束测试
+testing/ascend/auto_schedule/test_schedule_integration.py:1182  最终容量测试","已实现，静态及全链路 Lowering 测试入口。本轮未执行测试。","testing/ascend/transform/test_ascend_buffer_addresses.py::test_partial_plan_first_fits_unplaced_buffers_without_reuse
+testing/ascend/transform/test_ascend_buffer_addresses.py::test_single_allocation_can_end_at_capacity
+testing/ascend/auto_schedule/test_schedule_integration.py::test_overlap_is_checked_after_automatic_versions_expand"
+"7","内存管理与 Layout（Memory Management & Layout）","7.6","多版本存储管理","7.6.01","自动选择多缓冲循环和槽数","编译器判断哪个循环能为 Buffer 完成一轮写入和读取，再根据读写依赖、流水发射间隔和片上容量选择槽数。也支持用户指定归属循环或固定槽数。","1、自动判断归属时，需要可分析的循环和 Task 访问，并检查读取前是否写入所需范围。
+2、可用 multi_buffer_eligible 指定归属。
+3、共用 .data 的别名和绑定的 SF 组须使用一致的版本设置。声明冲突时会报错。
+4、{buf: 1} 将 Buffer 排除出自动多缓冲。{buf: (1, ""auto"")} 保留资格并固定为一槽。
+5、读取前一轮的值，或无法证明本轮写入覆盖读取范围时，可能推导不出自动归属。
+6、请求多版本却无法为绑定组确定合法的共同归属时会报错。
+7、自动流水求解没有可行解时可退回顺序执行，自动槽数降为 1。
+8、手工排程不可行或容量预检失败时会报错。","# 外层 i 中先由内层 row 分两次写 ub[row, :]，随后读取整个 ub
+multi_buffer_eligible → 挂在外层 i，对应一次完整写入和读取。
+T.annotate_buffer_versions({ub: (2, ""auto"")})  # 合法归属下固定为两槽。","在归属分析和求解之后分别检查归属循环、版本数和别名一致性。对照退出、保留单槽、固定版本和自动求解回退。","src/ascend/transform/annotate_multi_buffer_eligible.cc:447  资格与归属分析
+tilelang/ascend/language/annotations.py:101  版本 API
+tilelang/ascend/transform/z3_scheduler.py:470  求解及回退
+testing/ascend/auto_schedule/test_buffer_ownership.py:159  归属测试
+examples/ascend/example_vecadd.py:22  vecadd 示例
+testing/ascend/auto_schedule/test_schedule_units.py:216  自动与固定版本预算用例
+testing/ascend/auto_schedule/test_buffer_ownership.py:169  版本退出及固定策略","已实现，归属与版本选择有 IR 测试入口，固定版本有 AscendC 运行示例。本轮未执行测试。","testing/ascend/auto_schedule/test_buffer_ownership.py::test_row_writes_and_whole_buffer_read_belong_to_outer_owner
+testing/ascend/auto_schedule/test_buffer_ownership.py::test_version_policy_controls_storage_and_alias_eligibility
+testing/ascend/auto_schedule/test_schedule_units.py::test_ss_versions_share_capacity_across_aivs"
+"7","内存管理与 Layout（Memory Management & Layout）","7.6","多版本存储管理","7.6.02","多缓冲槽位选择与跳过写入时保留旧值","同一个 Buffer 有多个槽位时，编译器为每次读写选槽。源码中的版本时钟指用于选槽的迭代序号或计数器。使用 write_counter 时，跳过写入的迭代可以继续读到最近一次写入的数据。","1、iteration 按逻辑迭代序号选槽，显式使用时要求恰好一个归属循环。
+2、counter 在一轮实际执行的相关访问结束后推进。
+3、auto 按归属和控制流选择选槽方式。
+4、write_counter 在本轮第一次实际写入前推进，随后访问沿用该槽。
+5、write_counter 须显式指定槽数，调用方须保证首次读取前已初始化。
+6、显式 counter 拒绝同一归属循环内跨 stage 的相关访问。
+7、write_counter 拒绝归属循环内的 loop_break。
+8、write_counter 拒绝无法绑定到 Buffer 的不透明指针访问。
+9、write_counter 拒绝形状、stride 或偏移随循环变化的视图。","T.annotate_buffer_versions({cached: (2, ""write_counter"")})
+# 用例中 start=0，每 6 轮写一次。第 0 轮写入槽 0，第 1 轮只读时继续读取槽 0。
+# 第 6 轮再次写入，切换到槽 1。","固定版本数，检查 IR 中计数器初值、推进位置与 guard。运行时分别检查写后读、无写但读取、完全跳过三种情况。","src/ascend/transform/prepare_multi_buffer.cc:970  PrepareMultiBuffer
+src/ascend/transform/prepare_multi_buffer.cc:1170  WriteCounterValidator
+src/ascend/transform/prepare_multi_buffer.cc:1388  时钟生成
+testing/ascend/auto_schedule/test_buffer_epochs.py:28  epoch 测试
+testing/ascend/auto_schedule/test_buffer_materialization.py:153  迭代时钟测试
+testing/ascend/auto_schedule/test_schedule_integration.py:1389  保值用例
+testing/ascend/auto_schedule/test_epoch_guards.py:119  跨 stage 拒绝测试","已实现，有静态及数值测试入口。本轮未执行测试。","testing/ascend/auto_schedule/test_buffer_epochs.py::test_storage_clock
+testing/ascend/auto_schedule/test_epoch_guards.py::test_cross_stage_storage_cannot_use_counter_clock
+testing/ascend/auto_schedule/test_schedule_integration.py::test_write_counter_retains_values_across_guarded_iterations"
+"7","内存管理与 Layout（Memory Management & Layout）","7.6","多版本存储管理","7.6.03","多缓冲分配、索引改写与 UB 槽距对齐","确定槽数和选槽规则后，编译器扩展底层 Buffer，并把 Load、Store、TileOp 区域、指针和条件中的访问改到对应槽位。对于带版本维的多槽 UB，编译器还会对齐槽距，也就是相邻槽位起点之间的字节数。","1、带版本维的多槽 UB 按 32 B 对齐槽距。
+2、不同 dtype 的视图使用同一字节槽距，再按各自的元素大小换算索引。
+3、绑定的 L0 数据和 SF 共用选槽规则，原有前导维保持原样。
+4、归属循环外的 fill 若能作为各槽的初始写入，可以扩展到所有槽。
+5、单槽不增加版本维。
+6、L1 和 L0 保持自己的布局。
+7、仅声明环大小且没有版本维的 flat UB 跳过槽距调整。
+8、已知跨越单槽边界，或无法关联到合法版本计划的访问会触发诊断。","# 两槽，按迭代 i 选槽，依据 IR 断言简写
+UB shape (64,) → (2, 64)；B[j] → B[i % 2, j]
+# 独立的 8 B 槽用例，第二槽起点 8 B → 32 B，uint16/uint8 视图字节地址相同。","给定版本计划，检查分配形状、各类访问的选槽索引及实际字节偏移。对比跨 dtype 的读回结果，覆盖单槽和没有版本维的 flat UB。","src/ascend/transform/materialize_multi_buffer.cc:56  MaterializeMultiBuffer
+src/ascend/transform/rewrite_buffer_version_layout.cc:134  UB 版本布局重写
+testing/ascend/auto_schedule/test_buffer_materialization.py:59  版本和初始化测试
+testing/ascend/layout/test_ascend_fractal_storage_integration.py:87  Fractal 版本 pitch 集成测试
+testing/ascend/language/test_tilelang_ascend_multibuffer_alignment.py:62  跨 dtype 数值测试
+testing/ascend/auto_schedule/test_buffer_materialization.py:100  外部 fill 广播测试
+testing/ascend/auto_schedule/test_buffer_materialization.py:241  数据与 SF 槽位测试","已实现，静态及数值测试入口。本轮未执行测试。","testing/ascend/auto_schedule/test_buffer_materialization.py::test_physical_versions_use_the_prepared_clock
+testing/ascend/auto_schedule/test_buffer_materialization.py::test_aliases_use_allocation_pitch
+testing/ascend/auto_schedule/test_buffer_materialization.py::test_broadcast_fill_initializes_every_version
+testing/ascend/language/test_tilelang_ascend_multibuffer_alignment.py::test_multibuffer_dtype_changing_view_shares_aligned_storage"
+"7","内存管理与 Layout（Memory Management & Layout）","7.6","多版本存储管理","7.6.04","手写多缓冲索引与槽数声明","支持在 DSL 中声明由用户自行选槽的 Buffer。编译器保留用户写的索引，并使用声明的环大小分析读写依赖。","1、用 T.annotate_manual_multi_buffer 声明手工选槽的 Buffer。
+2、直接传 Buffer 时从静态首维取槽数。首维动态且未给槽数时会报错。
+3、可通过字典显式给出正槽数，包括没有独立版本维的 flat Buffer。
+4、有可识别版本维的 UB 仍可按 7.6.03 对齐槽距。
+5、同一个 Buffer 不能同时使用手写槽索引和自动 write_counter。
+6、复杂索引和控制流可能无法得到完整依赖。
+7、完全手工调度时由调用方安排同步。","# scheduled IR fixture，ub.shape=(2, 64)，manual_multi_buffer={ub.data: 2}
+ub[i % 2, 0]  # 读写沿用用户槽索引
+# 条件访问下，相关 MTE2_MTE3 set/wait 仍使用 i % 2。","检查手写索引和环大小是否保留，相关依赖使用相同槽号。覆盖动态首维缺少显式槽数、与自动 write_counter 冲突和 flat 环不改槽距的场景。","tilelang/ascend/language/annotations.py:198  手工版本 API
+src/ascend/transform/annotate_multi_buffer_eligible.cc:761  write_counter 冲突检查
+testing/ascend/auto_schedule/test_sync_dependencies.py:115  手工环测试
+examples/ascend/flashmla/kernel.py:393  FlashMLA 实例","部分支持。有静态 IR 测试入口和实例，复杂手工环的依赖分析范围待确认。本轮未执行测试。","testing/ascend/auto_schedule/test_sync_dependencies.py::test_manually_indexed_storage_keeps_the_lexical_clock_under_a_guard
+testing/ascend/auto_schedule/test_buffer_ownership.py::test_explicit_storage_policy_overrides_automatic_claims[manual-ring]"
