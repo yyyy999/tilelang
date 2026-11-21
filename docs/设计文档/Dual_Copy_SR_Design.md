@@ -2,9 +2,9 @@
 
 | 项目 | 内容 |
 |---|---|
-| 代码基线 | `test_memory`，`74a53f4c89c462cb7370e1cd69977631aefc09d4` |
+| 代码基线 | `test_memory`，`26335cc7e83d896c973e5e7ee81d3bf7910a8e4f` |
 | 仓库 | yyyy999/tilelang，本地工作区 D:/codes/yyz/tilelang |
-| 适用目标 | TileLang Ascend 方言，主要面向 Ascend 950（A5，默认架构 dav-3510）的 Ascend C API 后端。PTO 按其 CodeGen 约束单独描述。 |
+| 适用目标 | TileLang Ascend 方言的 AscendC 后端（`target="ascend"`），面向 Ascend 950（A5，默认架构 `dav-3510`）。 |
 
 本文以该提交中的实现和用例定义为准。本次完成源码和文档静态核对，真机数值与性能结果需在交付环境记录。[Ascend 目标说明](../../tilelang/ascend/README.md#L24)
 
@@ -12,46 +12,47 @@
 
 ## 1.1 场景目标
 
-Ascend 混合核由一个 AIC（Cube 矩阵计算核）和两个 AIV（Vector 核）协作。Cube 将累加结果写入 L0C，两个 AIV 在各自的 UB（Unified Buffer，片上统一缓冲区）处理半块结果。如 GEMM 将 L0C 结果分给两个 AIV，再把两个 UB 半块合并写回 GM（Global Memory）。FlashAttention 还使用 UB→L1 合并 Vector 结果，供后续 Cube 计算消费。
+`T.dual_copy(src, dst)` 表达一个整块与两份半块之间的分发或合并。本文的**整块**是两个 AIV 合计处理的逻辑区域，**半块**是单个 AIV 的区域。沿切分轴，AIV0 对应前半，AIV1 对应后半。GEMM 示例先从 L0C 分发到两个 UB，再由两个 AIV 合并写回 GM。[GEMM 调用示例](../../examples/ascend/example_gemm.py#L76)
 
-`T.dual_copy` 用一个逻辑 tile 表达双路数据的归属。分发时 AIV0 获取前半、AIV1 获取后半，合并时各 AIV 按同一规则写回共享区域。算子可通过 Buffer 或切片指定实际搬运范围，并按所选调度方式完成生产、消费和缓冲区复用。[GEMM 示例](../../examples/ascend/example_gemm.py#L76) · [FlashAttention 示例](../../examples/ascend/flash_attention/core.py#L90)
+源码 `DualCopyPath` 区分硬件路径与三条软件路径。本文沿用“硬件双路”和“软件双路”作为这两种实现的简称，同一个 `T.dual_copy` 调用根据两端 scope 及整块所在侧选择路径。
+
+| 术语 | 分路发生在哪里 | 执行行为和适用条件 |
+|---|---|---|
+| **硬件双路** | `RewriteDualCopy` 保留双目标 Copy，FixPipe 根据模式在执行时划分源矩阵并路由。 | 仅 L0C→UB。AIC 提交一条双目标 FixPipe，携带整块 M/N 和一组基址。两个 UB 使用相同的本地目的偏移，分别收到前、后半。 |
+| **软件双路** | `RewriteDualCopy` 在编译期用 `sid` 改写整块一侧的逻辑范围。`sid` 是执行该 Copy 的 AIV 编号，取 0 或 1。 | GM→UB、UB→GM、UB→L1。两个 AIV 分别执行自己那一半的普通搬运。分路由编译器表达，搬运仍走目标的 DMA 或布局搬运指令。 |
+
+来源：[源码路径分类](../../src/ascend/transform/rewrite_dual_copy.cc#L97) · [硬件保留与软件改写](../../src/ascend/transform/rewrite_dual_copy.cc#L309)
 
 ## 1.2 约束限制
 
-| 项目 | 约束 |
+| 约束 | 当前规则 |
 |---|---|
-| 内核 | Ascend 混合核须包含 Cube 工作。软件双路要求静态的 `cthread=2`。关闭自动调度时，将软件双路放在 `T.Kernel` 的显式 `T.Vector()` 作用域内，按 kernel 依赖建立同步。 |
-| 区域 | 两端同时为一维或同时至少二维。一维仅用于软件双路，二维及以上以倒数第二轴 M、末轴 N 为切分候选。切分轴必须能唯一推断，静态完整轴长度为半轴的两倍。非切分轴按各路径的实际布局及搬运几何校验。 |
-| 动态区域 | 分配形状可帮助推断切分轴，实际区域仍参与搬运。`RewriteDualCopy` 在两侧切分 extent 都为常量时检查静态比例。符号场景须保证运行时比例、容量和对齐。 |
-| L0C→UB | 源与目的 dtype 相同。A5 FixPipe 的硬件双目标模式与 `quant_pre` 互斥，双路使用 `quant_pre=0`。M 切分整块 M 为偶数，N 切分要求整块源 N 是 32 元素的倍数。 |
-| L0C 源布局 | 矩阵尾两轴起点为零，前导轴只选择一个平面。生产者实际 L0C pitch 须匹配源切片归一化得到的紧凑 pitch。`T.dual_copy` 当前公开签名没有 `l0_pitch`。 |
-| UB 目的布局 | ND（行主序）目的遵循 FixPipe 地址及 stride 的 32 字节对齐。NZ（分形布局）目的走 16 列面板约束和物理 pitch 计算。PTO 的 L0C→UB CodeGen 当前要求 ND，另对常量描述符执行 stride 和 size 检查。 |
-| 软件布局 | GM↔UB 使用普通 MTE（搬运引擎）几何。UB→L1 按布局走连续 DMA 或 NZ 搬运，要求各 AIV 写入在物理地址上互不覆盖。 |
+| 执行上下文 | 这是混合核 API，kernel 须包含 Cube 工作。Rewrite 阶段的软件双路要求 `cthread` extent 静态为 2。手动模式须把软件双路放在 `T.Kernel` 的显式 `T.Vector()` 中。 |
+| 切分形状 | 一维仅用于软件双路。二维及以上只从尾两轴选 M 或 N。静态整块和半块的切分轴必须严格为 2:1。符号 extent 可借分配 shape 推断方向，调用方仍需保证运行时比例和容量。 |
+| 硬件双路 | A5 的双目标模式与 `quant_pre` 互斥。L0C 和 UB 须同 dtype，描述符使用 `quant_pre=0`。M 切分要求整块 M 为偶数；N 切分要求整块 N 为 32 元素的倍数。自动调度时，两路共用一次 AIC 搬运触发，调用点须处在与 `sid` 无关的控制路径。 |
+| L0C 地址 | 源矩阵尾两轴起点为零，前导索引一次只选中一个矩阵。**紧凑 pitch**指按本次源区域的 M 向上对齐至 16 行得到的源面板间隔参数。实际 L0C 生产布局须与该值匹配。`T.dual_copy` 无 `l0_pitch` 参数。 |
+| 目的地址与布局 | ND UB 的起始地址和行 stride 需按 FixPipe 的 32 字节要求检查。NZ UB 使用 16 列面板的布局校验。 |
 
-来源：[DSL 签名与约束](../../tilelang/ascend/language/copy_op.py#L53) · [静态检查](../../src/ascend/transform/rewrite_dual_copy.cc#L140) · [L0C lowering](../../src/ascend/op/copy.cc#L682) · [PTO L0C→UB](../../src/ascend/codegen/codegen_pto.cc#L3372) · [昇腾 Fixpipe 双目标模式](https://www.hiascend.com/doc_center/source/zh/CANNCommunityEdition/910beta2/API/ascendcopapi/atlasascendc_api_07_0251.html)
+来源：[DSL 约束](../../tilelang/ascend/language/copy_op.py#L53) · [静态比例校验](../../src/ascend/transform/rewrite_dual_copy.cc#L152) · [L0C 描述符](../../src/ascend/op/copy.cc#L682)
 
 ## 1.3 功能规格
 
-| 路径 | 调用方提交的区域 | 可观测结果 |
+| 路径 | 源 / 目的区域 | AIV0 / AIV1 的结果 |
 |---|---|---|
-| L0C→UB | 完整 L0C tile 和每个 AIV 的 UB 半块。 | AIC 发出一条硬件双目标 FixPipe，将前后半写入两个 UB 的相同局部偏移。 |
-| GM→UB | 完整 GM tile 和每个 AIV 的 UB 半块。 | 每个 AIV 从 GM 的相应半块读入自己的 UB。 |
-| UB→GM | 每个 AIV 的 UB 半块和完整 GM 目标。 | 两个 AIV 将前后半写入 GM 的对应区域，支持 L2 cache hint。 |
-| UB→L1 | 每个 AIV 的 UB 半块和完整 L1 目标。 | 两个 AIV 各写对应区域，满足布局条件时复用 ND→NZ 或 NZ post-copy。 |
+| L0C→UB | 整块 / 本地半块 | FixPipe 将前、后半写到两个 UB 的相同局部偏移。 |
+| GM→UB | 整块 / 本地半块 | 两个 AIV 从 GM 的不同半块读入各自 UB。 |
+| UB→GM | 本地半块 / 整块 | 每个 AIV 写入 GM 中自己的半块，保留 `l2_cache_ctrl`。 |
+| UB→L1 | 本地半块 / 整块 | 各 AIV 写自己的 L1 区域，按实际布局选用连续或 NZ 搬运。 |
 
-所有路径的验收均需核对两路不同的行列数据，验证实际切分、读写覆盖范围及同步后的可见性。对 GM 边缘验证裁剪后的有效数据，对空区域验证无有效搬运。AscendC 与 PTO 分别记录源码编译和设备结果。[内存路径分类](../../src/ascend/transform/rewrite_dual_copy.cc#L106) · [搬运空范围保护](../../src/ascend/op/copy.cc#L407)
+验收检查前后半归属、实际读写窗口和同步后的可见性。GM 边缘按每路裁剪后的范围比较；空范围应跳过有效搬运。[范围改写](../../src/ascend/transform/rewrite_dual_copy.cc#L309) · [空区间保护](../../src/ascend/op/copy.cc#L407)
 
 # 2、SR实现分析设计
 
 ## 2.1 方案分析
 
-| 实现机制 | 选用位置 | 取舍 |
-|---|---|---|
-| 普通 `T.copy` | 单路搬运及软件双路改写后的基础 op。 | 直接表达一次区域搬运。两个 AIV 对整块的归属需要由区域或控制流表达。 |
-| 原生双目标 FixPipe | L0C→UB。 | 完整矩阵的尺寸、起点和 stride 只编码一次，硬件负责切分和目的 UB 路由。要求满足双目标、同 dtype 及目标布局约束。 |
-| 按 AIV 分流 | GM→UB、UB→GM、UB→L1。 | 编译期改写大侧区域后复用普通 Copy 和后续布局、裁剪、调度 pass。实际可用的 burst 形状和物理布局由每路搬运决定。 |
+选择路径的依据是**谁负责切分输入与路由目的地址**。L0C→UB 的 FixPipe 描述符允许用一对指针表达两个目标，因此保留一个带双目标模式的 Copy。将它拆为按 AIV 独立调度的任务会丢失该描述符所表达的共同触发、偏移和版本关系。GM→UB、UB→GM、UB→L1 的普通搬运各自只处理一个明确的源、目的区域，因此在调度前先改写两路范围。否则下游会用整块估算单路范围，边界裁剪也无法保留两路原定分界。
 
-四条路径共用同一 DSL。实施分界由存储 scope 决定，L0C→UB 让硬件解释双目标，三条软件路径先物化各 AIV 的逻辑访问范围。后续 Pass 共用普通区域分析与目标 lowering。具体选择条件与指令映射见 2.3 节。
+普通 `T.copy` 仍是软件改写后的搬运语义。`T.dual_copy` 增加的是整块与两个 AIV 半块的归属关系，`RewriteDualCopy` 在这里决定保留该关系到 FixPipe，还是用范围表达式将它落实到各 AIV。[Rewrite 的流水位置](../../tilelang/ascend/pipeline.py#L73) · [子核分析保护双目标任务](../../src/ascend/transform/auto_schedule/subcore.h#L248)
 
 ## 2.2 模型设计
 
@@ -65,21 +66,20 @@ flowchart TD
     PRE -->|归一化区域及 layout| SCHED["调度与同步 Pass"]
     SCHED -->|设备 IR 和缓冲区版本| LOWER["AscendLowerTileOp<br/>选择搬运并重映射指针"]
     LOWER -->|低层 intrinsic| AC["AscendC CodeGen"]
-    LOWER -->|低层 intrinsic| PTO["PTO CodeGen"]
 ```
 
-DSL 定义整块和半块的逻辑归属。Rewrite 负责选择路径并把软件双路改写成可被下游分析的读写范围。布局、边界和调度 pass 处理这些范围及存储版本。Lowering 才计算物理指针和指令字段，CodeGen 将它们映射到目标接口。[Pass 流水](../../tilelang/ascend/pipeline.py#L73) · [LowerArgs 与指针重映射入口](../../src/ascend/transform/lower_tile_op.cc#L1254)
+布局和调度分析依赖改写后的读写范围。Lowering 还接收 layout map 和 buffer remap，将区域映射到实际存储和指令字段。[Pass 流水](../../tilelang/ascend/pipeline.py#L73) · [LowerArgs 与指针重映射](../../src/ascend/transform/lower_tile_op.cc#L1254)
 
 ### 关键数据结构及所有者
 
 | 结构或表示 | 保存的信息 | 创建或更新者 | 使用者 |
 |---|---|---|---|
 | `BufferRegion`、`tl.region` | Buffer、切片起点及范围。`tl.region` 调用还带访问掩码。 | DSL 将 BufferLike 参数规范化。软件路径由 `RewriteRegion` 重写整块一侧的范围。 | Copy 解析、布局分析、OOB 裁剪、核间同步与 Lowering。 |
-| `tl.tileop.ascend_copy` 的 `Call` | 两个 region 参数，`dual_dst_ctl`、`double`、UnitFlag、L2 cache 等注解。注解保留在 IR，供不同 Pass 解码。 | Ascend DSL 发出。`RewriteDualCopy` 保留原生双路注解，软件分流后删除已消费的双路字段。 | Rewrite、布局和调度分析、TileOp Lowering。 |
+| `tl.tileop.ascend_copy` 的 `Call` | 两个 region 参数，`dual_dst_ctl` 控制切分轴，`double` 标识整块在目的侧，另有 `unit_flag_ctrl` 和 L2 cache 等注解。 | Ascend DSL 发出。`RewriteDualCopy` 保留硬件双路注解，软件改写后删除已消费的双路字段。 | Rewrite、布局和调度分析、TileOp Lowering。 |
 | `CopyNode`、`AscendCopyNode` | 源、目标、各轴 Range，以及从 IR 注解解码的 `dual_dst_ctl`、`unit_flag_ctl`、`sub_blockid` 等类型化字段。 | `AscendCopy` 从 Call 的参数和注解构造类型化视图。 | C++ Pass 分类和校验搬运，`Lower` 选择 DMA 或普通 Copy 分支。 |
 | `AscendFractalLayoutInfo`、`AscendFractalRegionInfo` | 分形内层尺寸、分形轴及映射后的区域 bounds。 | Layout inference 提供布局；`TryExtractAscendFractalLayout` / `TryExtractAscendFractalRegion` 从布局及区域提取。 | Normalize 和 L0C→UB Lowering 计算物理容量、pitch 和 NZ 描述符。 |
 | `StridedLayout`、`MTECopy2D` | 内外轴 extent、元素 stride；DMA 规划结果包含行数、每行元素数、每侧行 stride 和基址偏移。 | 从实际 Buffer 和 Range 构造 `StridedLayout`；GM↔UB 由 `PlanMTECopy` 归并并求得二维方案。 | DMA Lowering 换算字节并发出对应的 MTE intrinsic。 |
-| `tl.ascend_copy_matrix_cc_to_ub` 等低层 Call | 物理端点、有效尺寸、stride 和指令模式字段。 | `LowerDMACopy` 生成，`AscendLowerTileOp` 递归处理生成结果及访问指针。 | AscendC / PTO CodeGen 按各自接口重排并验证参数。 |
+| `tl.ascend_copy_matrix_cc_to_ub` 等低层 Call | 物理端点、有效尺寸、stride 和指令模式字段。 | `LowerDMACopy` 生成，`AscendLowerTileOp` 递归处理生成结果及访问指针。 | AscendC CodeGen 将这些字段映射为 C API 参数。 |
 
 来源：[区域改写](../../src/ascend/transform/rewrite_dual_copy.cc#L56) · [类型化 Copy 解析](../../src/ascend/op/copy.cc#L1200) · [分形布局与范围信息](../../src/ascend/layout/ascend_layouts.h#L92) · [MTECopy2D 与 PlanMTECopy](../../src/ascend/op/ascend_mte_plan.h#L343) · [低层 FixPipe Call](../../src/ascend/op/copy.cc#L787) · [TileOp lowering 后递归重映射](../../src/ascend/transform/lower_tile_op.cc#L1271)
 
@@ -101,8 +101,6 @@ classDiagram
 
 ### 从 DSL 到指令
 
-前端按实际区域判断切分轴。常量按值比较，符号形状按 `structural_equal(half*2, full)` 比较；无法唯一判定时尝试比较分配形状，仍保留原始区域。通过 dtype 检查后，前端调用 Ascend `copy` 构造 `tl.tileop.ascend_copy`，注解 `dual_dst_ctl=1/2` 表示 M/N，`double` 标记整块在目的侧。[前端区域推断及注解](../../tilelang/ascend/language/copy_op.py#L107)
-
 ```mermaid
 flowchart TD
     DSL["T.dual_copy 声明整块与半块"] --> AXIS{"区域或分配形状<br/>能否唯一确定轴？"}
@@ -122,27 +120,23 @@ flowchart TD
     PRE --> SCHED{"是否开启自动调度？"}
     SCHED -->|开启| AUTO["核分配、成本估算、调度<br/>InsertSync 与多缓冲物化"]
     SCHED -->|关闭| MANUAL["保留显式 Cube/Vector 及用户同步"]
-    AUTO --> LOWER["版本归一化、后端 VF Pass<br/>AscendLowerTileOp 与 LowerAccessPtr"]
+    AUTO --> LOWER["版本归一化、AscendSimdVFLowerParallel<br/>AscendLowerTileOp 与 LowerAccessPtr"]
     MANUAL --> LOWER
     LOWER --> DESC["低层搬运 Call、存储处理<br/>SplitHostDevice"]
-    DESC -->|ascend| AC["AscendC CodeGen<br/>asc_copy_l0c2ub 或普通 DMA"]
-    DESC -->|pto| PTO["PTO 校验与 CodeGen<br/>pto.mte_l0c_ub 等"]
+    DESC --> AC["AscendC CodeGen<br/>asc_copy_l0c2ub 或普通 DMA"]
 ```
 
-### 路径判定、异常和尾块
+### 切分方向与路径合法性
 
-| 处理点 | 正常分支 | 诊断或边界分支 |
-|---|---|---|
-| 轴、scope 和 dtype | 一维软件双路仅有一个候选轴；矩阵比较 M/N。L0C→UB、GM→UB 以源为整块，另外两条软件路径以目的为整块。 | 前端在 rank 组合不合法、轴无法唯一推断或 L0C dtype 不同时拒绝。Rewrite 拒绝不支持的路径、静态非 2:1 或原生 N 切分的整宽非 32 倍数。 |
-| sid 和控制路径 | 软件路径复用 extent 为 2 的 `cthread`，或在自动模式的 `tilelang_root` 合成。原生双路走 AIC 一致路径。 | 手动模式的软件双路无显式 `T.Vector()` 或 sid extent 不等于 2 时拒绝。自动调度拒绝将原生双路投影到依赖 sid 的控制分支。 |
-| 归一化与空区间 | 符合布局时按实际区域改写，ND M 切分可有条件扩大搬运列，原生 N 切分保留边界。支持的 GM 路径在分流后裁剪。 | ND 步长或补齐容量无法证明时可能仅告警。静态空区域化为 no-op，动态空区域由 Lowering 的 `has_data` guard 跳过。 |
-| 描述符与目标 | `AscendLowerTileOp` 用区域及布局生成描述符；目标 CodeGen 输出 C API 或 PTODSL。 | 布局不可表达或参数不合法时由对应阶段诊断。PTO 对 ND 格式、dtype 及常量 stride 额外检查，见下文指令示例。 |
+1. **选轴**。两端同时为一维时只比较唯一轴。矩阵比较尾两轴。对每个候选轴检查源或目的是否恰为另一侧的两倍，常量按值比较，符号用 `structural_equal(half*2, full)`。先用实际区域，候选数不为一时再比较分配 shape；仍无法唯一选轴时前端报错。分配 shape 仅辅助选轴，Copy 继续携带原有切片起点和 extent。
+2. **编码方向**。`dual_dst_ctl=1/2` 在 TileOp 阶段分别表示 M/N；一维软件路径沿唯一轴，内部编码为 2。`double` 是整块在目的侧的标记。所选轴上，只要实际区域或分配 shape 表明目的侧为源侧两倍，就带上该标记。`RewriteDualCopy` 同时检查 scope 和标记是否匹配，存在 `double` 的路径仅为 UB→GM、UB→L1。标记方向与路径不匹配会拒绝，即使某个轴从数值看满足 2:1。
+3. **校验实际区间**。两端切分 extent 均为常量时，Rewrite 验证整块长度等于半块长度的两倍。硬件 N 切分还要求整块 N 能被 32 整除。例如 `64×48→64×24` 可以选出 N，但 L0C→UB 校验失败。某一侧为符号时，本阶段跳过这组常量校验；后续的 `has_data` 只保护非空条件，运行时比例和布局仍是调用方契约。
 
-来源：[Rewrite 分类与静态限制](../../src/ascend/transform/rewrite_dual_copy.cc#L106) · [sid 验证](../../src/ascend/transform/rewrite_dual_copy.cc#L335) · [子核一致路径](../../src/ascend/transform/auto_schedule/subcore.h#L782) · [边界规范化](../../src/ascend/transform/normalize_fractal_storage.cc#L313) · [编译流水](../../tilelang/ascend/pipeline.py#L37)
+同一 `dual_dst_ctl` 在两条实现中的去向不同。软件路径在范围改写后消费掉该注解，普通 DMA 不会读取它。硬件路径将它传入 FixPipe 描述符，设备据此选择切分轴。[DSL 选轴与编码](../../tilelang/ascend/language/copy_op.py#L107) · [路径分类](../../src/ascend/transform/rewrite_dual_copy.cc#L106) · [静态校验](../../src/ascend/transform/rewrite_dual_copy.cc#L152) · [注解消费](../../src/ascend/transform/rewrite_dual_copy.cc#L309)
 
 ### 指令执行与两路归属
 
-硬件分发时，M 切分把前后半行写往各自 UB，N 切分把前后半列写往各自 UB。两种方式的目的基址是各 AIV 本地 UB 中的同一偏移。软件分流时各 AIV 按改写后的地址执行普通搬运，既可从 GM 读取半块，也可将半块写往共享 GM 或 L1。以下时序图描述单个逻辑 tile 的选中路径，数据依赖及同步按实际 kernel 建立。
+下图按一个 tile 展示三种执行方向；每条路径的等待和复用顺序取决于所在 kernel 的依赖。
 
 ```mermaid
 sequenceDiagram
@@ -177,95 +171,69 @@ sequenceDiagram
     end
 ```
 
-### 软件双路的区域和地址
+### 软件双路的范围改写与地址
 
-| 方向 | AIV sid = 0 / 1 的区域 | 下游 |
+设整块一侧的切分轴起点为 `S`，另一侧对应轴的实际 extent 为 `H`。`RewriteDualCopy` 只改整块一侧：将起点改为 `S + sid × H`，extent 改为 `H`。其他轴和本地 UB 范围保持原样。因此两个 AIV 分别访问 `[S,S+H)` 和 `[S+H,S+2H)`。偏移需要加到原切片起点，省略 `S` 会使带偏移的 tile 搬错位置。
+
+| 路径 | 被改写的一侧 | 改写后的实际搬运 |
 |---|---|---|
-| GM→UB | 只移动源切分轴，`src_min + sid × dst_half_extent`，源切分轴 extent 设为目标半块大小。每核写其本地 UB。 | `PlanMTECopy` 规划连续或二维 burst → `asc_copy_gm2ub_align`。 |
-| UB→GM | 只移动目标切分轴，`dst_min + sid × src_half_extent`，目标切分轴 extent 设为源半块大小。 | `PlanMTECopy` → `asc_copy_ub2gm_align`，保留传入的 L2 cache hint。 |
-| UB→L1 | 目标按相同 sid 规则切分。两个 AIV 的 L1 写入区需在物理布局下互不覆盖。 | `InsertNd2Nz` 处理带 NZ 布局的目的区域。原始搬运分支要求同元素位宽、两端连续、元素数匹配以及传输字节数可证明为 32 的倍数。 |
+| GM→UB | GM 源 | 同一 GM 区域的两个半块分别进入本地 UB。 |
+| UB→GM | GM 目标 | 两份本地 UB 半块写入 GM 的不同区域。 |
+| UB→L1 | L1 目标 | 两路各写自己的区间，再依据目标布局生成连续 DMA 或 NZ 版本。 |
 
-`RequireSid` 要求 `cthread` extent 静态为 2。自动模式可从已有 `T.MixedKernel` 取 sid，或由 Rewrite 在 `tilelang_root` 构造一个；手动模式仅复用显式 `T.Vector` 的 sid。软件重写剥离 `dual_dst_ctl`、`unit_flag_ctrl` 及使用过的 `double`。一维软件搬运直接切唯一轴。GM DMA 按实际源/目标 stride 形成字节描述符。
+两次执行来自同一个带 `sid` 的逻辑 Copy。自动模式复用已有 `cthread`，必要时在 `tilelang_root` 合成 extent 为 2 的作用域；手动模式复用显式 `T.Vector()` 内的绑定。`RewriteDualCopy` 删除已消费的 `dual_dst_ctl`、`double`，同时去掉不适用于软件路径的 `unit_flag_ctrl`。后续调度可将 `sid` 具体化，地址仍按执行该分支的 AIV 计算。[范围改写和注解清理](../../src/ascend/transform/rewrite_dual_copy.cc#L309) · [作用域校验](../../src/ascend/transform/rewrite_dual_copy.cc#L335)
 
-UB→L1 的 NZ 目标要求匹配的逻辑区间与 C0 列对齐。C0 是 NZ 的内层列分组宽度，按该布局及 dtype 决定。`RewriteUBToL1` 对已有的同 dtype NZ 源发 `ascend_nd2nz_post_copy`，保留源/目的各自的 NZ pitch。对稠密 ND 源，源范围须覆盖完整连续行并满足起始地址 32 字节对齐，M/N 需静态确定。宽度恰为一个 C0 且 dtype 相同时可直接 post-copy；其余受支持场景先以 SIMD scatter 转到 `pitch=rows+1` 的 UB 临时区，再用 post-copy 写 L1。AscendC scatter 自身有受约束的 FP32↔BF16 组合，PTO scatter 要求同类型。
+**从逻辑起点换算物理地址。** 对内轴连续的二维 ND 区域，元素偏移为 `row × row_stride + col`，再按 dtype 换算字节。切分改变的是起点和搬运长度；逐行寻址仍使用底层 Buffer 的行 stride。
 
-| 例子 | sid=0 | sid=1 | stride 与地址 |
+| 算例 | AIV0 | AIV1 |
+|---|---|---|
+| GM→UB，M 切分。GM 区域 `G[8:72,16:80]`，每路 `32×64`，GM 行 stride 为 128 元素。 | 行 `[8,40)`，起始元素偏移 `8×128+16=1040`。 | 行 `[40,72)`，起始偏移 `40×128+16=5136`。 |
+| UB→GM，N 切分。每核 UB `32×32`，目标 `G[8:40,16:80]`，GM 行 stride 为 128 元素。 | 列 `[16,48)`，起始元素偏移 1040。 | 列 `[48,80)`，起始元素偏移 1072。 |
+| 一维 UB→GM，`UB[0:32]` 到 `G[64:128]`。 | `G[64:96]`。 | `G[96:128]`。 |
+
+N 切分示例用 FP32 时，每路 32 行，每行搬 `32×4=128 B`。GM 的行间距为 `128×4=512 B`。`PlanMTECopy` 保留这个行间距；将半块合成连续字节搬运会跨入另一半或行间空隙。仅单行，或两侧由规划结果证明行间距均等于有效行长时，GM↔UB Lowering 才合并成一个连续 burst。[普通 DMA 规划](../../src/ascend/op/copy.cc#L455) · [连续搬运条件](../../src/ascend/op/copy.cc#L497)
+
+**UB→L1 的布局分支。** 原始搬运要求源、目的都可合并为连续范围，元素位宽与数量相符，并满足 32 字节传输粒度。带 NZ 布局的 L1 由 `InsertNd2Nz` 处理。这里的 **post-copy** 指在数据已按目标列分组排布后，按源、目标各自的 NZ pitch 写入 L1 的 `ascend_nd2nz_post_copy`。已有同 dtype NZ 源可直接用此步骤；满足条件的 ND 源若只有一个 C0 列分组且同 dtype，也可直接发出。其他受支持的 ND 场景先 scatter 到 UB 临时区，再按该区实际的 `rows+1` pitch 读出。L1 目标列起点、宽度和基址偏移须满足其 C0 对齐，ND 输入还要是完整连续行并满足源地址对齐。scatter 另有 dtype 组合和列宽约束。
+
+物理偏移由 NZ 布局决定。例如现有 `64×128` FP32 用例的 L1 列分组宽度为 8。M 切分的后半从第 32 行开始，目标元素偏移差为 `32×8=256`；N 切分的后半从第 64 列开始，跨 8 个列分组，目标偏移差为 `8×64×8=4096`。两例均在 `test_nd2nz_matmul_reuses_mixed_kernel_sid` 中检查。按 ND 行 stride 线性化会得到不同的目标地址。[UB→L1 原始搬运](../../src/ascend/op/copy.cc#L817) · [NZPitch](../../src/ascend/transform/insert_nd2nz.cc#L231) · [RewriteUBToL1](../../src/ascend/transform/insert_nd2nz.cc#L371) · [物理偏移断言](../../testing/ascend/layout/test_tilelang_ascend_nd2nz_matmul.py#L103)
+
+**GM 尾块在定好分界后裁剪。** 对支持的 GM↔UB 描述符，可配对的源、目的非单例轴须有可证明相同的 extent。分流后，各对应轴取 `min(声明长度, 源剩余容量, 目的剩余容量)` 作为有效长度，两端剩余容量均以零为下限。以上述 N 切分为例，若 GM 分配宽度为 70，声明目标仍到第 80 列，AIV1 的起点仍为 48，只把源、目标的搬运宽度从 32 缩到 22。若先裁整块再等分，AIV1 的起点会移到第 43 列，与原定半块归属不一致。若 GM 分配止于第 48 列之前或恰好宽 48，AIV1 的有效长度为 0。Lowering 对已知空块省略搬运，动态空块由 `has_data` 保护；UB 上未写的位置不属于本次结果。[GM 路径裁剪](../../src/ascend/transform/insert_oob_padding.cc#L399) · [逐轴有效长度](../../src/ascend/op/oob_padding.cc#L189) · [空操作保护](../../src/ascend/op/copy.cc#L407)
+
+### 硬件双路的描述符、对齐与同步
+
+**尺寸与路由。** `LowerDMACopy` 从布局处理后的源区域取完整 `m_size/n_size`。FixPipe 用 `dual_dst_ctl=1` 把 M 分成两半，用 `2` 把 N 分成两半。描述符中的源指针始终指向完整源 tile 的起点；两个目标共享同一个局部 UB 指针偏移。若把每个 AIV 的半块尺寸传入，硬件会再次切半。`sub_blockid` 是单目标模式 `dual_dst_ctl=0` 的 UB 选择字段；硬件双路由模式完成路由。
+
+**源和目的的 stride 独立计算。** 源 L0C 逻辑坐标 `(m,n)` 映射为 `(n//16,m//16,m%16,n%16)`。当两矩阵轴都从零开始时，按本次源区域计算紧凑 pitch `P=ceildiv(M,16)×16`。描述符写入 `src_stride=P`，单位为 `16×sizeof(src_dtype)` 字节，因此每跨一个 16 列面板跨 `P×16` 个源元素。若在 `64×128` 分配内生产了紧凑的 `32×64` 结果，N 切分的后半从第 32 列开始，对应源元素偏移为 `2×32×16=1024`；若误用分配 M=64，偏移就成了 2048。如果实际生产的是 64 行、搬运其中的 32 行前缀，`T.dual_copy` 仍按源区域推导 pitch，调用方需使该值与实际生产布局匹配。
+
+| UB 目的布局 | 描述符中 `dst_stride` 的含义 | 计算例 |
+|---|---|---|
+| ND | 相邻目标行的元素间距，取 Buffer 的 row stride，`NZ2ND_en=1`。 | `64×64` 源做 N 切分，每核写 32 列。若 UB 行宽是 64，指令的 `dst_stride` 仍为 64；填 32 会把下一行写进上一行的未选列。 |
+| NZ | 相邻 16 列目的面板的元素间距，取布局输出 shape 末三维乘积，`NZ2ND_en=0`。 | 物理上每列面板包含 48 行时，`dst_stride=48×16=768`；即使每核只在其中写 16 行，面板间隔也保持 768。 |
+
+
+**M/N 与对齐如何相互影响。** ND 目的的基址对齐、行 stride 对齐和实际搬运宽度分别检查。`NormalizeFixpipeCopy_` 对 ND 行 stride 无法证实为 32 字节倍数的场景告警，原有 stride 保持。在 M 切分中，切分点取决于 M，扩大 N 不会移动前后半行的边界。设 `A=32/sizeof(dst_dtype)`，可将源 N 上取整到 `ceildiv(N,A)×A`，目的宽度按需要增至该值。只有能证明扩大后的源范围在物理容量内，且目的范围落在 `min(UB 分配列数, 目的行 stride)` 内时才改写。例如 FP32 的 `4×10→2×10` M 切分，有 16 列源物理容量与 16 列可写 UB 时，可把搬运宽度从 10 提到 16。补搬的是源数据，逻辑输出仍只消费声明的 10 列。容量无法证明时保留原区间并告警。
+
+N 切分以 `N/2` 定义后半的源起点；调整整块 N 会移动该起点，因此本 Pass 保留 N 分界。NZ 目的绕过 ND 宽度补齐，在 Lowering 检查 16 列面板、列起点和宽度对齐，以及显式逻辑 strides 是否稠密。动态硬件双路仍从运行时有效 M/N 取整块尺寸，调用方需满足选定切分轴的比例和对齐要求。归一化用条件表达式保留空宽度，Lowering 在实际范围为空时保护整条描述符，避免把零宽块扩大成有效搬运。
+
+**两路共享局部偏移和存储版本。** 子核分析保留硬件双路的目的 UB 为两个地址空间中的同一偏移和版本槽位，拒绝依 `sid` 复制该 AIC 任务。一条指令只有一个目的偏移，若两路各自推进缓冲区版本，就无法用这条指令表达两个不同的目标槽位。`unit_flag_ctrl` 透传给 FixPipe 以配合 MAD 的生产；AIV 读 UB 前的等待和上一版 UB 复用前的依赖仍由跨核同步保证。软件双路在 Rewrite 后只保留普通搬运的同步依赖。
+
+来源：[L0C 布局映射](../../src/ascend/layout/ascend_layouts.cc#L256) · [L0C 描述符计算](../../src/ascend/op/copy.cc#L682) · [ND 容量、N 切分与空块处理](../../src/ascend/transform/normalize_fractal_storage.cc#L313) · [NZ stride 断言](../../testing/ascend/layout/test_ascend_fractal_storage_integration.py#L44) · [子核版本和投影约束](../../src/ascend/transform/auto_schedule/subcore.h#L248) · [Fixpipe 字段与对齐](https://www.hiascend.com/doc_center/source/zh/CANNCommunityEdition/910beta2/API/ascendcopapi/atlasascendc_api_07_0251.html)
+
+### 指令映射与参数核对
+
+以下用同一个 `64×64` FP32 源说明描述符中三个容易混淆的尺寸。源为紧凑 L0C，目的为 ND UB。
+
+| 调用场景 | 每个 UB 的写入区域 | `(n_size, m_size, dst_stride, src_stride)` | 双目标模式 |
 |---|---|---|---|
-| GM→UB，M 切分。GM tile `G[8:72, 16:80]`，每核 UB `32×64` | 读行 `[8,40)` | 读行 `[40,72)` | 如 GM 整行 stride=128 元素，则两个源起点为 `8×128+16=1040` 与 `40×128+16=5136`。 |
-| UB→GM，N 切分。每核 UB `32×32`，写 `G[8:40,16:80]` | 写列 `[16,48)` | 写列 `[48,80)` | 目标起点分别为元素偏移 1040 和 1072。每行只写 32 个元素；两路 GM 行 stride 均为 128 元素，不能把整个半块当作连续 GM 区域。 |
-| 一维 UB→GM，`UB[0:32]` 写到 `G[64:128]` | `G[64:96]` | `G[96:128]` | sid 仅改变目标起点，extent 均为 32。 |
+| M 切分 | `32×64`，UB 行宽 64 | `(64,64,64,64)` | `1` |
+| N 切分，紧凑目的 | `64×32`，UB 行宽 32 | `(64,64,32,64)` | `2` |
+| N 切分，目标切片 | `UB[:,0:32]`，UB 行宽 64 | `(64,64,64,64)` | `2` |
 
-以表中的 N 切分为例，Rewrite 前后对比仅展示逻辑区域。后续调度可以把 `sid` 具体化到各 AIV 的执行分支。
+AscendC 从 `tl.ascend_copy_matrix_cc_to_ub` 生成 `asc_set_l0c_copy_nz_para(1,0,0)` 和一条 `asc_copy_l0c2ub`。IR 的 3–6 号参数按上表顺序进入接口，双目标模式是 IR 参数 7，`sub_blockid` 是参数 8，在 C API 中先传 `sub_blockid` 再传模式。低层 Call 的 IR 参数 2 固定为 0，C API 会略过它；它与软件路径中用于计算区域的 `cthread sid` 用途不同。对 L0C 双路，`quant_pre=0` 且 `NZ2DN_en=0`。
 
-```text
-T.dual_copy(UB[0:32, 0:32], G[8:40, 16:80])
-  → tl.tileop.ascend_copy(region(UB, 0, 0, 32, 32),
-                          region(G, 8, 16, 32, 64), dual_dst_ctl=2, double=1)
-  → tl.tileop.ascend_copy(region(UB, 0, 0, 32, 32),
-                          region(G, 8, 16 + sid * 32, 32, 32))
-```
+软件路径 Lowering 在已改写的每路区域上发出普通搬运。AscendC 的 GM→UB、UB→GM 分别对应 `asc_copy_gm2ub_align`、`asc_copy_ub2gm_align`，UB→L1 的直接搬运对应 `asc_copy_ub2l1`。NZ post-copy 携带该半块的实际 pitch，CodeGen 据此生成写 L1 的搬运。
 
-对 GM 边缘，`AscendInsertOOBPadding` 在软件分流后按两侧可配对且同长度的有效轴裁剪。若上例的 GM 分配宽度改为 70，仍提交列 `[16,80)` 的逻辑目标，sid=1 的源、目标有效宽度同时裁为 22。已证明的空搬运在 lowering 化为 no-op，动态空搬运用 `has_data` 保护。消费者必须遵守有效数据范围。GM→L1 的零填充有独立条件，软件双路应按裁剪后的区域消费有效数据。
-
-来源：[RewriteRegion](../../src/ascend/transform/rewrite_dual_copy.cc#L56) · [改写与 sid 校验](../../src/ascend/transform/rewrite_dual_copy.cc#L309) · [DMA Lower](../../src/ascend/op/copy.cc#L407) · [UB→L1 原始搬运](../../src/ascend/op/copy.cc#L817) · [RewriteUBToL1](../../src/ascend/transform/insert_nd2nz.cc#L371) · [scatter dtype 检查](../../src/ascend/transform/insert_nd2nz.cc#L190) · [ClampDMACopyTail](../../src/ascend/op/oob_padding.cc#L76) · [PTO scatter](../../src/ascend/codegen/codegen_pto.cc#L4833)
-
-### 原生 L0C→UB 几何、对齐与同步
-
-```mermaid
-flowchart LR
-    ACC["AIC · L0C 完整矩阵 M×N"] --> FIX{"PIPE_FIX<br/>一次双目标搬运"}
-    FIX -->|按 M 切分| M["每个 UB 接收 M/2 × N"]
-    FIX -->|按 N 切分| N["每个 UB 接收 M × N/2"]
-    M -->|前半的行| U0["AIV0 · 本地 UB"]
-    M -->|后半的行| U1["AIV1 · 本地 UB"]
-    N -->|前半的列| U0
-    N -->|后半的列| U1
-```
-
-| 关键字段 | 基线算法 |
-|---|---|
-| `m_size` / `n_size` | 硬件双路取源矩阵的完整 M、N，目的接收半块。普通 `T.copy` 的 `dual_dst_ctl=0`，尺寸取目的区域；若能证明目的超出源矩阵则报错。 |
-| L0C 源指针 | L0C 的 canonical NZ 排列把 `(m,n)` 映射为 `(n//16,m//16,m%16,n%16)`。源矩阵尾两轴起点必须为零，前导轴可选择平面/版本。原生双路只给一个源基址，第二半的读取由硬件处理。 |
-| `loop_src_stride` | 相邻 16 列分形面板的起点间隔，单位为 `16 × sizeof(src_dtype)`。默认 `映射后的 M 分形行数 × 16`。普通 `T.copy(...,l0_pitch=P)` 传分形行数，要求覆盖区域且不超过 L0C 容量；stride 为 `16×P`。 |
-| `loop_dst_stride`，ND | 目的物理行 stride，以目的元素计。来自 `NormalizeMTE2DLayout` 选定的 row mode。它可大于每路有效 N。非单位内 stride 或不可表示的布局会影响描述符合法性。 |
-| `loop_dst_stride`，NZ | 仅适用于符合 L0C 式 16 列布局的 UB 目标。取分形输出 shape 末三维的乘积，即相邻 N 面板的元素间距。要求列起点、目的宽和搬运宽可证明是 16 元素倍数，显式逻辑 strides 需稠密。 |
-| `dual_dst_ctl` / `sub_blockid` | 0 写单目标，由 `sub_blockid` 选 UB；1 按 M 等分；2 按 N 等分；3 不使用。原生双路的 UB0 吃前半，UB1 吃后半，两边目的指针含义是相同的本地偏移。 |
-| `quant_pre` / `NZ2ND_en` | 原生同 dtype 的 `quant_pre=0`。ND 目的发 `NZ2ND_en=1`，NZ 目的发 0。当前 `NZ2DN_en=0`。 |
-
-**示例**。紧凑 `64×64` FP32 L0C：两种切分的描述符均为 `m_size=64,n_size=64,src_stride=64`。M 切分给每个 UB `32×64`，稠密 ND `dst_stride=64`；N 切分给每个 UB `64×32`，稠密 ND `dst_stride=32`。若 N 切分写入 `UB[:, 0:32]` 且 UB 分配宽 64，目的 stride 仍为 64。若在 `64×128` 分配中实际只生产紧凑 `32×64` L0C，`src_stride=32`。若同样 `32×64` 是已存储的 `64×128` 结果的前缀，实际存储 pitch 为 64 行。普通 Copy 可传 `l0_pitch=4`；当前 Dual Copy 的公开入口无法显式传该值，应将生产布局与默认 pitch 匹配后使用。
-
-**对齐与尾块**。ND 目的按 32 字节校对行 stride；目的起始地址也需符合 C API 的 32 字节要求。对普通 Copy 和硬件 M 切分，`NormalizeFixpipeCopy_` 按目标元素大小将搬运 N 向上对齐到 32 字节，例如 FP32 的 10 列向上对齐为 16 列。普通 Copy 从目标宽推导，M 切分从源宽推导。只有能够证明扩大区间落在 L0C 物理容量以及 UB shape 和行 stride 内才改写。譬如源物理宽 16，目的分配宽 16、起点 8，待写 4 个 FP32 元素时可写到列 16；起点 12 时扩到 8 列会越界，Pass 保留原区间并告警。增加的列属于物理搬运范围，不保证补零。N 切分保留原分界，以免调整宽度使每个 AIV 的起点或跨度改变。NZ 目的绕过该 ND 补齐并在 lowering 校验。对动态原生双路，描述符继续使用源的有效 M/N，硬件据此等分；需保证运行时比例、容量与对齐。静态空范围不发指令，动态空范围以非空谓词控制。对未能证明的对齐或布局，需要检查最终描述符与真机结果。
-
-**同步与调度**。`RewriteDualCopy` 先运行，`EstimateLatency` 获取软件路径改写后的区域，或从 FixPipe 的双目标语义计算每核半块成本。子核分析让原生双路的目标 UB 在两边使用同一局部偏移和版本，并禁止把任务投影成依赖 sid 的原生分支。混合核同步和版本化在 `ResolveCore → InsertSync → MaterializeMultiBuffer` 等步骤完成，手动模式由算子维护生产、消费和 slot 复用顺序。UnitFlag 是 MAD 和 FixPipe 之间的细粒度协作控制。值 0 不走该协议，值 2 仅检查并保留，值 3 检查并在完成后清除。Cube→AIV 的可见性仍由跨核同步保证。
-
-来源：[L0C 布局映射](../../src/ascend/layout/ascend_layouts.cc#L256) · [L0C DMA lowering](../../src/ascend/op/copy.cc#L682) · [零起点与空 tile 谓词](../../src/ascend/op/copy.cc#L134) · [NormalizeFixpipeCopy_](../../src/ascend/transform/normalize_fractal_storage.cc#L313) · [动态及边界测试](../../testing/ascend/transform/test_ascend_normalize_fractal_storage.py#L482) · [子核投影](../../src/ascend/transform/auto_schedule/subcore.h#L248) · [延迟 geometry](../../src/ascend/transform/estimate_latency.cc#L1428) · [昇腾 Fixpipe 参数与 UnitFlag](https://www.hiascend.com/doc_center/source/zh/CANNCommunityEdition/910beta2/API/ascendcopapi/atlasascendc_api_07_0251.html)
-
-### IR、CodeGen 与硬件接口
-
-下面示意 `64×64` FP32 L0C → ND UB `64×32` 的 N 切分；省略 AccessPtr extent 及零值配置。CodeGen 将 TIRX 参数重新排列为 C API 参数，`sid` 与 `sub_blockid` 是两个字段。
-
-```text
-T.dual_copy(acc, ub)
-  → tl.tileop.ascend_copy(region(acc, 64, 64), region(ub, 64, 32), dual_dst_ctl=2)
-  → tl.ascend_copy_matrix_cc_to_ub(ub_ptr, acc_ptr, 0, 64, 64, 32, 64,
-                                  2, 0, 0, unit_flag, 0, 0, 0, 1, ...)
-  → asc_set_l0c_copy_nz_para(1, 0, 0)
-  → asc_copy_l0c2ub(ub_ptr, acc_ptr, 64, 64, 32, 64,
-                   sub_blockid=0, dual_mode=2, unit_flag, quant=0, ...)
-```
-
-| TIRX 参数索引 | 含义 | AscendC C API |
-|---|---|---|
-| 0, 1 | 目标、源指针 | 经 layout remap，直接传入 |
-| 2 | IR `sid`，在该 lowering 中为 0 | 不传给 `asc_copy_l0c2ub` |
-| 3–6 | N、M、目的 stride、源 stride | 按此顺序传入 |
-| 7, 8 | dual mode、单路目标子块 | C API 先传 `sub_blockid`，再转枚举传 dual mode |
-| 10, 11 | unit flag、pre-quant | `asc_unit_flag_mode`、`asc_quant_mode` |
-| 14, 25 | NZ2ND、NZ2DN | 分别传入两个格式开关 |
-
-AscendC 生成代码由 Bisheng 编译，`asc_copy_l0c2ub` 对应 PIPE_FIX。普通 GM/UB 与 UB/L1 使用相应 MTE 接口，例如 `asc_copy_gm2ub_align`、`asc_copy_ub2gm_align` 和 `asc_copy_ub2l1`。PTO 复用前段 IR，双目标生成 `pto.mte_l0c_ub(..., split=pto.SplitMode.M/N)`。PTO 要求匹配的 storage dtype、`quant_pre=0`、`NZ2ND_en=1`。当尺寸和 stride 都是常量时，CodeGen 还检查两侧 stride 均不小于完整的 `n_size`。因此上例的 `n_size=64,dst_stride=32` 可按 AscendC 路径生成，PTO 会在目的 stride 检查处拒绝。
-
-来源：[Ascend C API 发射器](../../src/ascend/codegen/codegen_ascend.cc#L1520) · [通过 C API 发出 GM/UB DMA](../../src/ascend/codegen/codegen_ascend.cc#L1429) · [PTO FixPipe 发射器](../../src/ascend/codegen/codegen_pto.cc#L3372) · [昇腾 asc_copy_l0c2ub](https://www.hiascend.com/document/detail/en/CANNCommunityEdition/910/API/ascendcopapi/docs/en/api/SIMD-API/C-API/cube_datamove/asc_copy_l0c2ub.md)
+来源：[AscendC FixPipe 参数映射](../../src/ascend/codegen/codegen_ascend.cc#L1520) · [GM/UB DMA 映射](../../src/ascend/codegen/codegen_ascend.cc#L1429) · [UB→L1 及 NZ post-copy](../../src/ascend/codegen/codegen_ascend.cc#L1648)
 
 ## 2.4 表设计
 
@@ -282,7 +250,7 @@ T.dual_copy(src, dst, *, unit_flag_ctrl=None, l2_cache_ctrl=0)
 | 参数或输出 | 定义 |
 |---|---|
 | `src`、`dst` | Buffer、BufferRegion 或可归一化的 BufferLoad。传入切片可指定实际区域。整块位于哪一侧由内存路径规则决定。 |
-| `unit_flag_ctrl` | 整数或 PrimExpr。省略时无注解，按 0 lowering。原生 FixPipe 保留该参数，软件双路改写时移除。 |
+| `unit_flag_ctrl` | 整数或 PrimExpr。用于 MAD→FixPipe 的 UnitFlag 控制，省略时按 0 lowering。硬件双路透传给 FixPipe，软件双路在 Rewrite 时移除。 |
 | `l2_cache_ctrl` | 默认整数 0，也可使用可归一化的缓存策略名称，例如 `NOTALLOC_PW`。UB→GM 双路改写保留该注解。 |
 | 调用结果 | 写目标区域的 TileOp，可在 PrimFunc 中作为语句使用。 |
 
@@ -295,7 +263,6 @@ T.dual_copy(src, dst, *, unit_flag_ctrl=None, l2_cache_ctrl=0)
 | 配置 | 实际作用 |
 |---|---|
 | `target="ascend"` | 生成 Ascend C API 源码，Ascend 950 默认架构为 `dav-3510`。 |
-| `target="pto"` | 复用 Ascend 前段流水，采用 PTO 合法性检查、CodeGen 和工具链。 |
 | `tl.enable_auto_schedule` | 默认 `True`。软件路径可复用 `T.MixedKernel` 的 sid 或在 `tilelang_root` 合成 `cthread=2`。设为 `False` 时使用显式 `T.Cube()` / `T.Vector()` 和调用方的同步协议，软件路径复用 Vector 作用域的 sid。 |
 
 来源：[目标架构](../../tilelang/ascend/README.md#L24) · [后端注册](../../tilelang/ascend/backend.py#L86) · [自动调度配置](../../tilelang/ascend/pipeline.py#L23) · [自动 sid 合成](../../src/ascend/transform/rewrite_dual_copy.cc#L263)
@@ -316,7 +283,7 @@ T.dual_copy(src, dst, *, unit_flag_ctrl=None, l2_cache_ctrl=0)
 
 ### 2.8.2 上下游兼容
 
-上游算子应提供正确的混合核结构、区域形状和 Buffer layout。用 `T.gemm` 得到的 L0C 紧凑布局须与复制范围匹配。下游 AIV 按自己的 half 消费，GM/L1 消费端在同步后读取实际有效区。AscendC 与 PTO 共有前段 IR，后端对 UB 格式及描述符的限制分别验收，尤其是 PTO 的常量 N 切分 stride。[Ascend 混合核示例](../../tilelang/ascend/README.md#L149) · [PTO 描述符校验](../../src/ascend/codegen/codegen_pto.cc#L3389)
+上游算子应提供正确的混合核结构、区域形状和 Buffer layout。用 `T.gemm` 得到的 L0C 紧凑布局须与复制范围匹配。下游 AIV 按自己的半块消费，GM/L1 消费端在同步后读取实际有效区。[Ascend 混合核示例](../../tilelang/ascend/README.md#L149)
 
 ## 2.9 安全分析
 
@@ -348,7 +315,6 @@ T.dual_copy(src, dst, *, unit_flag_ctrl=None, l2_cache_ctrl=0)
 | padding 或 DMA 写入超出有效邻域 | 支持的 GM 路径裁剪。ND FixPipe 按源物理容量、UB shape 和 stride 做补齐空间证明。 | 对有告警或不能证明的场景检查实际指令。有效邻域和允许写入的 padding 区分开验证。 |
 | 非对齐窗口和 pitch 误用 | Lowering 检查 L0C 源矩阵为零起点，按源区域推导紧凑 pitch。目的侧按 ND/NZ 确定 stride。 | 用非零 UB 切片和较大 allocation 内的紧凑生产块验证 pointer、stride 和数据。调用方还需保证推导的 pitch 与生产者一致。 |
 | 读写竞争、复用时过早覆盖 | 自动模式跟踪核间依赖和版本；原生双路 UB 保持共同的局部地址与版本。手动模式由算子维护 flag。 | 连续执行多个 tile 并复用同一 slot，验收两路发布、等待和归还。区分 UnitFlag 与 Cube/AIV 跨核同步。 |
-| target 差异 | AscendC 与 PTO 各自生成代码，PTO 有附加描述符校验。 | 错误需定位到目标与校验字段，PTO 的 M/N 分别检查目标代码和设备结果。 |
 
 来源：[Rewrite 静态检查](../../src/ascend/transform/rewrite_dual_copy.cc#L152) · [Normalize FixPipe 容量检查](../../src/ascend/transform/normalize_fractal_storage.cc#L390) · [AutoSchedule 和同步](../../tilelang/ascend/pipeline.py#L113) · [双目标 UB 存储](../../src/ascend/transform/auto_schedule/subcore.h#L248)
 
@@ -360,10 +326,10 @@ T.dual_copy(src, dst, *, unit_flag_ctrl=None, l2_cache_ctrl=0)
 |---|---|
 | DSL 与 Rewrite | 对照实际 region 与 allocation shape，检查 `dual_dst_ctl`、`double`、dtype 与 scope，确认软件路径仅移动大侧切分轴。 |
 | 布局及调度 | 查看归一化后的 UB shape、逻辑 extent、物理 pitch、裁剪范围、sid 和 buffer version。同步异常时检查两个 AIV 的实际消费与归还顺序。 |
-| Lowering 与 CodeGen | 保存 lowering IR 和 C API/PTODSL。核对完整 M/N 或软件半块长度、行步长、UB 起点、dual mode 和 UnitFlag。 |
+| Lowering 与 CodeGen | 保存 lowering IR 和生成的 Ascend C API 源码。核对完整 M/N 或软件半块长度、行步长、UB 起点、dual mode 和 UnitFlag。 |
 | 设备复现 | 用可区分行列的输入和目标边界哨兵复现。保存真机首个失败 tile 或迭代位置，以及 CANN、芯片型号和对应生成代码。 |
 
-来源：[调度 Pass 入口](../../tilelang/ascend/pipeline.py#L113) · [Ascend C API 参数映射](../../src/ascend/codegen/codegen_ascend.cc#L1520) · [PTO 参数映射](../../src/ascend/codegen/codegen_pto.cc#L3372)
+来源：[调度 Pass 入口](../../tilelang/ascend/pipeline.py#L113) · [Ascend C API 参数映射](../../src/ascend/codegen/codegen_ascend.cc#L1520)
 
 # 3、AR开发者测试设计
 
@@ -381,7 +347,6 @@ T.dual_copy(src, dst, *, unit_flag_ctrl=None, l2_cache_ctrl=0)
 | DC-DEV-08 | `test_manual_mixed_pipeline_shares_sub_block_id`、`test_manual_pipeline_rewrites_compact_nz_dual_copy` | 验证手动混合核经同一个 Vector sid 下沉至普通 DMA。 | 显式 Cube/Vector 的 GM→UB→GM 及紧凑 NZ UB→L1 kernel，关闭自动调度。 | Lower 到 AscendC，检查 kernel 声明、sid 读取及接口。 | 生成 `__mix__(1, 2)`、一次 sid 读取和对应的普通 DMA 调用。 | 未执行。CodeGen 用例。 |
 | DC-DEV-09 | `test_nz_fixpipe_layout_survives_full_lowering`、`test_nz_fixpipe_logical_reads_npu` | 验证物理 NZ pitch 及两路读出的数值。 | 输入 BF16，L0C FP32，目的 UB 有 plane 和非零切片起点，测试含 alias 变体。 | 捕获 Lowering 后的描述符；在 AscendC 真机执行 M/N 模式并读回逻辑元素。 | M 描述符的 `dst_stride=48×16` 且 `NZ2ND_en=0`。设备输出与小整数输入的参考计算逐元素相等。 | 未执行。Lowering 和设备用例。 |
 | DC-DEV-10 | `test_subcore_fixpipe_synchronization` | 验证 AIC 分发后两个 AIV 的消费同步。 | BF16 GEMM，原生 M 切分的 M=16 或 32，`unit_flag_ctrl=3`。 | 编译 AscendC kernel，在 NPU 上读出 AIV 处理后的拼接结果。 | 与参考 GEMM 在现有测试容差内一致。 | 未执行。设备用例。 |
-| DC-DEV-11 | `test_pto_tvm_ffi_mixed_cube_vector_gemm` | 确认已有的 PTO 手动混合核调用。 | `128×64×128` GEMM，FP32 L0C→ND UB 的 M 切分，PTO tvm_ffi。 | 关闭自动调度，以 `target="pto"` 编译并在设备执行。 | 输出与参考 GEMM 在现有测试容差内一致。 | 未执行。设备用例，覆盖 M 切分。 |
 
 可从仓库根目录直接指定 pytest 节点。以下两条分别选择纯 Pass 断言与实际设备断言。
 
@@ -390,13 +355,13 @@ python -m pytest -q testing/ascend/transform/test_ascend_rewrite_dual_copy.py::t
 python -m pytest -q testing/ascend/auto_schedule/test_schedule_integration.py::test_subcore_fixpipe_synchronization
 ```
 
-来源：[Rewrite 用例](../../testing/ascend/transform/test_ascend_rewrite_dual_copy.py#L33) · [FixPipe 边界和空块](../../testing/ascend/transform/test_ascend_normalize_fractal_storage.py#L437) · [对齐与描述符](../../testing/ascend/transform/test_ascend_normalize_fractal_storage.py#L567) · [软件双路 IR 与 CodeGen](../../testing/ascend/layout/test_tilelang_ascend_nd2nz_matmul.py#L103) · [手动软件双路](../../testing/ascend/language/test_tilelang_ascend_nd2nz_scatter.py#L87) · [NZ 用例](../../testing/ascend/layout/test_ascend_fractal_storage_integration.py#L44) · [设备同步用例](../../testing/ascend/auto_schedule/test_schedule_integration.py#L530) · [PTO 设备用例](../../testing/ascend/runtime/test_tilelang_pto_tvm_ffi.py#L271)
+来源：[Rewrite 用例](../../testing/ascend/transform/test_ascend_rewrite_dual_copy.py#L33) · [FixPipe 边界和空块](../../testing/ascend/transform/test_ascend_normalize_fractal_storage.py#L437) · [对齐与描述符](../../testing/ascend/transform/test_ascend_normalize_fractal_storage.py#L567) · [软件双路 IR 与 CodeGen](../../testing/ascend/layout/test_tilelang_ascend_nd2nz_matmul.py#L103) · [手动软件双路](../../testing/ascend/language/test_tilelang_ascend_nd2nz_scatter.py#L87) · [NZ 用例](../../testing/ascend/layout/test_ascend_fractal_storage_integration.py#L44) · [设备同步用例](../../testing/ascend/auto_schedule/test_schedule_integration.py#L530)
 
 # 4、资料建议
 
 | 资料名称 | 修改内容/关注点 | 是否需要修改 | 备注 |
 |---|---|---|---|
-| 用户文档 · [Ascend 使用说明](../../tilelang/ascend/README.md#L126) | 在现有 GEMM 示例旁补充数据归属，列出四条内存路径、M/N 形状、软件一维和混合核条件。注明 L0C 同 dtype、PTO 目标限制。 | 建议补充 | 用户据此选择 `T.copy` 或 `T.dual_copy`。 |
+| 用户文档 · [Ascend 使用说明](../../tilelang/ascend/README.md#L126) | 在现有 GEMM 示例旁补充数据归属，列出四条内存路径、M/N 形状、一维软件双路和混合核条件。注明 L0C 双路的同 dtype 及目的布局约束。 | 建议补充 | 用户据此选择 `T.copy` 或 `T.dual_copy`。 |
 | 接口参考 · [Ascend DSL docstring](../../tilelang/ascend/language/copy_op.py#L53) | 保持签名和提示参数说明，补充区域 shape 与分配 shape 的选轴顺序，明确 L0C 紧凑 pitch 和目的 alignment 的单位。 | 建议补充 | 核对 `l2_cache_ctrl` 保留路径、UnitFlag 语义和非法输入诊断。 |
 | 开发文档 · [IR Lower Trace](../../docs/tools/lower_trace.md#L32) | 增加一个 Ascend 排查示例，比较 Rewrite 前后的区域、分形归一化后的宽度，以及 Lowering 后的物理指针、stride 和低层 Call。 | 建议补充 | 排障时将 trace 与 target、提交和生成代码关联。 |
 | 测试交付记录 | 建立按硬件、CANN、target 和提交记录的验收表，分别归档 IR/CodeGen、设备数值、同步和性能。 | 建议整理 | 记录首次错误的参数、tile 和迭代位置。 |
@@ -411,5 +376,4 @@ python -m pytest -q testing/ascend/auto_schedule/test_schedule_integration.py::t
 | 实际边缘 tile 与 UB 非零窗口 | 同时覆盖零长度、较短的有效长度、保留 pitch 的 UB 切片和 GM 边界。用哨兵检查相邻有效区域。 | 运行时参数能触及 0、最小合法非零和完整 extent；L0C 生产 pitch 明确，并有可验证的目标分配边界。 | 原生双路空块不搬运，合法块按实际范围切分；GM 路径仅搬裁剪后的区域；写入止于逻辑范围和允许补齐区。 | 编译期对齐告警须关联实际地址和描述符。静态 Pass 用例无法覆盖所有符号形状组合。 |
 | 跨次同步和内存复用 | 验证 UB 发布后消费、归还后覆盖，覆盖多 tile、流水和复用同一 slot。 | 设备，分别采用自动调度和实际支持的手动 flag 协议。 | 多轮输出稳定，无超时、陈旧数据或两路覆盖。 | 更长运行可放大偶发竞争。记录首个异常轮次，保留调度 IR 和版本信息。 |
 | 混合布局的 UB→L1 | 验证两个 AIV 的逻辑切片投影到共享 L1 后的物理间距，并由 Cube 实际读取。 | 原始连续、已 NZ 的 post-copy、ND→NZ scatter 各选适用算子，用完整 tile 与边缘合法配置。 | Cube 消费结果与参考一致，无两路物理写入冲突。 | L1 物理重叠无法仅靠逻辑区域不重叠判断；根据 NZ pitch 检查偏移。 |
-| AscendC / PTO 交付矩阵 | 分开验证有效 M/N descriptor、常量 stride，以及目标对未支持格式或组合的诊断。 | 使用交付工具链分别构建和运行。PTO 包含能通过描述符检查及会触发校验的 N 切分两个样例。 | 支持的组合正确编译和执行，违反目标规则的组合给出对应诊断或由测试记录其它平台限制。 | 当前已有 PTO 设备用例覆盖 M 切分。N 切分确认结果需单独记录。 |
 | 实际性能与资源 | 同时记录端到端时延、FixPipe/MTE 搬运、burst、UB 占用及跨核同步。 | 正确性先通过，固定设备型号、频率条件、工具链、输入规模和编译参数，完整与尾块分别采样。 | 可复现实测结果，与第 2.10 节的逻辑字节数、布局和指令路径可对应。 | 端到端结果受重叠与同步影响，目标阈值待同条件数据确认。 |
