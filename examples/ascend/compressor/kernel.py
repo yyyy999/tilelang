@@ -176,7 +176,8 @@ def _swizzle(m_tiles, n_tiles):
     def aswt_swizzle(tile_idx):
         m_tile = T.alloc_var("int32")
         n_tile = T.alloc_var("int32")
-        row_idx = tile_idx // n_tiles // window
+        # The merged tail can span more than one regular window.
+        row_idx = T.min(tile_idx // n_tiles // window, main_row)
         if row_idx < main_row:
             m_tile = row_idx * window + tile_idx % window
             n_tile = tile_idx // window % n_tiles

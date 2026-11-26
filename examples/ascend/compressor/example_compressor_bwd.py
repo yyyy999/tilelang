@@ -134,7 +134,7 @@ def compressor_bwd(x, wkv, wgate, d_cmp, softmax, kv, *, cmp_ratio, coff=1, sequ
         "scatter",
         (groups, tokens, head_dim, cmp_ratio, coff, dtype),
         lambda: compressor_scatter(groups, tokens, head_dim, cmp_ratio, coff, dtype),
-        (4, 5, 6),
+        [4, 5, 6],
     )
     reduce = _compile(
         "reduce",
@@ -160,7 +160,7 @@ def compressor_bwd(x, wkv, wgate, d_cmp, softmax, kv, *, cmp_ratio, coff=1, sequ
         "dw",
         (gemm_tokens, hidden, compress_dim, dtype),
         lambda: compressor_dw(gemm_tokens, hidden, compress_dim, dtype),
-        (3, 4),
+        [3, 4],
     )
     d_x = dx(d_kv, d_score, wkv, wgate)[:tokens]
     d_wkv, d_wgate = dw(d_kv, d_score, x_pad)

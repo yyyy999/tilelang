@@ -81,3 +81,5 @@ def test_compressor_bwd_kernel():
     run_correctness()
     run_correctness(seq=256, head_dim=512, coff=1, cmp_ratio=128)
     run_correctness(batch=2, seq=128, dtype=torch.float16, seqused=[64, 128], start_pos=[1, 0], packed=True)
+    # dX has five M tiles and two N tiles, so the merged tail spans two windows.
+    run_correctness(seq=1280, hidden=512)
