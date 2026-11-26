@@ -6,8 +6,6 @@ into a private APE partial. Cube cores then run the four projection GEMMs:
 reduced in a fixed core order, so the launch is deterministic.
 """
 
-from __future__ import annotations
-
 import tilelang.ascend.language as T
 
 NUM_CORES = 32
