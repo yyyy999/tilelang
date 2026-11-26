@@ -233,7 +233,8 @@ def compressor_dx(tokens, hidden, compress_dim, dtype):
                         b_l1,
                         transpose=True,
                     )
-                    T.gemm(a_l1, b_l1, res, transpose_B=True, clear_accum=kt == 0)
+                    # Wait for the previous tile's Fixpipe before reusing res.
+                    T.gemm(a_l1, b_l1, res, transpose_B=True, clear_accum=kt == 0, unit_flag_ctrl=uf_mid)
                 for kt in T.Pipelined(k_tiles, num_stages=stages):
                     T.copy(
                         d_score[m_tile * tile_m : (m_tile + 1) * tile_m, kt * tile_k : (kt + 1) * tile_k],

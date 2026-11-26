@@ -83,3 +83,11 @@ def test_compressor_bwd_kernel():
     run_correctness(batch=2, seq=128, dtype=torch.float16, seqused=[64, 128], start_pos=[1, 0], packed=True)
     # dX has five M tiles and two N tiles, so the merged tail spans two windows.
     run_correctness(seq=1280, hidden=512)
+
+
+@tilelang.testing.requires_ascend
+def test_compressor_bwd_reuses_l0c_across_tiles():
+    from example_compressor_bwd import run_correctness
+
+    # dX has 64 output tiles on 32 blocks, so each block reuses its L0C.
+    run_correctness(seq=2048, hidden=2048, head_dim=512)

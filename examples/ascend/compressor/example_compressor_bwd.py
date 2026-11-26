@@ -253,8 +253,9 @@ def run_regression_perf(batch=1, seq=8192, hidden=4096, head_dim=512, cmp_ratio=
     softmax = torch.softmax(torch.randn(groups, window, head_dim, device="npu"), dim=1)
     kv = torch.randn(groups, window, head_dim, device="npu")
     d_cmp = torch.randn(groups, head_dim, device="npu", dtype=dtype)
-    # Compile before timing. The timed region is the four-kernel backward.
+    # Compile and complete the first launch before entering the benchmark.
     compressor_bwd(x, wkv, wgate, d_cmp, softmax, kv, cmp_ratio=cmp_ratio, coff=coff)
+    torch.npu.synchronize()
 
     def launch():
         return compressor_bwd(x, wkv, wgate, d_cmp, softmax, kv, cmp_ratio=cmp_ratio, coff=coff)
