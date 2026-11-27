@@ -192,7 +192,7 @@ def _swizzle(m_tiles, n_tiles):
     return aswt_swizzle
 
 
-def compressor_dx(tokens, hidden, compress_dim, dtype):
+def compressor_dx(tokens, hidden, compress_dim, dtype, cube_blocks=NUM_CORES):
     """``dX = dKv @ Wkv + dScore @ Wgate`` with one fp32 accumulator."""
     tile_m = 256
     tile_n = 256
@@ -216,11 +216,11 @@ def compressor_dx(tokens, hidden, compress_dim, dtype):
         wgate: T.Tensor((compress_dim, hidden), dtype),
         d_x: T.Tensor((tokens, hidden), dtype),
     ):
-        with T.Kernel(NUM_CORES) as bx:
+        with T.Kernel(cube_blocks) as bx:
             a_l1 = T.alloc_l1((tile_m, tile_k), dtype)
             b_l1 = T.alloc_l1((tile_n, tile_k), dtype)
             res = T.alloc_l0c((tile_m, tile_n), "float32")
-            for tile_idx in T.Persistent([out_tiles], NUM_CORES, bx):
+            for tile_idx in T.Persistent([out_tiles], cube_blocks, bx):
                 m_tile, n_tile = aswt_swizzle(tile_idx)
                 for kt in T.Pipelined(k_tiles, num_stages=stages):
                     T.copy(
@@ -258,7 +258,7 @@ def compressor_dx(tokens, hidden, compress_dim, dtype):
     return main
 
 
-def compressor_dw(tokens, hidden, compress_dim, dtype):
+def compressor_dw(tokens, hidden, compress_dim, dtype, cube_blocks=NUM_CORES):
     """``dWkv = dKv^T @ X`` and ``dWgate = dScore^T @ X`` on one accumulator."""
     tile_m = 256 if compress_dim % 256 == 0 else 128
     tile_n = 256
@@ -305,11 +305,11 @@ def compressor_dw(tokens, hidden, compress_dim, dtype):
         d_wkv: T.Tensor((compress_dim, hidden), dtype),
         d_wgate: T.Tensor((compress_dim, hidden), dtype),
     ):
-        with T.Kernel(NUM_CORES) as bx:
+        with T.Kernel(cube_blocks) as bx:
             a_l1 = T.alloc_l1((tile_m, tile_k), dtype)
             b_l1 = T.alloc_l1((tile_n, tile_k), dtype)
             res = T.alloc_l0c((tile_m, tile_n), "float32")
-            for tile_idx in T.Persistent([out_tiles], NUM_CORES, bx):
+            for tile_idx in T.Persistent([out_tiles], cube_blocks, bx):
                 m_tile, n_tile = aswt_swizzle(tile_idx)
                 # The second pass rereads this N-slice of X while it is still hot in L2.
                 acc_dw(d_kv, d_wkv, x, a_l1, b_l1, res, m_tile, n_tile)

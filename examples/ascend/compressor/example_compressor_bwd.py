@@ -80,7 +80,17 @@ def _pad_rows(tensor, rows):
     return torch.cat((tensor, pad), dim=0)
 
 
-def compressor_bwd(x, wkv, wgate, d_cmp, softmax, kv, *, cmp_ratio, coff=1, seqused=None, start_pos=None, cu_seqlens=None):
+def _resolve_cube_blocks(device, cube_blocks):
+    if cube_blocks is None:
+        cube_blocks = int(torch.npu.get_device_properties(device.index).cube_core_num)
+    if cube_blocks <= 0:
+        raise ValueError("cube_blocks must be positive")
+    return cube_blocks
+
+
+def compressor_bwd(
+    x, wkv, wgate, d_cmp, softmax, kv, *, cmp_ratio, coff=1, seqused=None, start_pos=None, cu_seqlens=None, cube_blocks=None
+):
     """Compute ``d_x``, ``d_wkv``, ``d_wgate`` and ``d_ape``.
 
     ``x`` is ``[B, S, H]`` or packed ``[T, H]`` with ``cu_seqlens``. ``wkv`` and
@@ -88,6 +98,7 @@ def compressor_bwd(x, wkv, wgate, d_cmp, softmax, kv, *, cmp_ratio, coff=1, sequ
     ``softmax`` / ``kv`` are ``[groups, coff * cmp_ratio, D]`` in segment order.
     ``H`` must be a multiple of 256. ``D`` is 128 or 512. Every segment length
     and ``seqused`` entry must be a multiple of ``cmp_ratio``.
+    ``cube_blocks`` defaults to the number of AICs on the input device.
     """
     if coff not in (1, 2):
         raise ValueError(f"coff must be 1 or 2, got {coff}")
@@ -123,6 +134,7 @@ def compressor_bwd(x, wkv, wgate, d_cmp, softmax, kv, *, cmp_ratio, coff=1, sequ
         raise ValueError("softmax and kv must be float32")
 
     device = flat.device
+    cube_blocks = _resolve_cube_blocks(device, cube_blocks)
     wkv = wkv.contiguous()
     wgate = wgate.contiguous()
     d_cmp = d_cmp.contiguous()
@@ -152,14 +164,14 @@ def compressor_bwd(x, wkv, wgate, d_cmp, softmax, kv, *, cmp_ratio, coff=1, sequ
     x_pad = _pad_rows(flat, pad)
     dx = _compile(
         "dx",
-        (gemm_tokens, hidden, compress_dim, dtype),
-        lambda: compressor_dx(gemm_tokens, hidden, compress_dim, dtype),
+        (gemm_tokens, hidden, compress_dim, dtype, cube_blocks),
+        lambda: compressor_dx(gemm_tokens, hidden, compress_dim, dtype, cube_blocks),
         -1,
     )
     dw = _compile(
         "dw",
-        (gemm_tokens, hidden, compress_dim, dtype),
-        lambda: compressor_dw(gemm_tokens, hidden, compress_dim, dtype),
+        (gemm_tokens, hidden, compress_dim, dtype, cube_blocks),
+        lambda: compressor_dw(gemm_tokens, hidden, compress_dim, dtype, cube_blocks),
         [3, 4],
     )
     d_x = dx(d_kv, d_score, wkv, wgate)[:tokens]
@@ -191,6 +203,8 @@ def run_correctness(
     seqused=None,
     start_pos=None,
     packed=False,
+    *,
+    cube_blocks=None,
 ):
     x, wkv, wgate, ape = _make_inputs(batch, seq, hidden, head_dim, cmp_ratio, coff, dtype)
     cu = None
@@ -222,6 +236,7 @@ def run_correctness(
         seqused=None if seqused is None else torch.tensor(seqused, dtype=torch.int32, device="npu"),
         start_pos=None if start_pos is None else torch.tensor(start_pos, dtype=torch.int32, device="npu"),
         cu_seqlens=None if cu is None else cu.npu(),
+        cube_blocks=cube_blocks,
     )
     names = ("d_x", "d_wkv", "d_wgate", "d_ape")
     for name, got, ref in zip(names, actual, expected, strict=True):
@@ -239,34 +254,35 @@ def run_correctness(
         seqused=None if seqused is None else torch.tensor(seqused, dtype=torch.int32, device="npu"),
         start_pos=None if start_pos is None else torch.tensor(start_pos, dtype=torch.int32, device="npu"),
         cu_seqlens=None if cu is None else cu.npu(),
+        cube_blocks=cube_blocks,
     )
     for name, first, second in zip(names, actual, replay, strict=True):
         torch.testing.assert_close(first, second, rtol=0, atol=0)
     print(f"compressor_bwd ({dtype}, coff={coff}, ratio={cmp_ratio}, D={head_dim}, S={seq}): correctness passed")
 
 
-def run_regression_perf(batch=1, seq=8192, hidden=4096, head_dim=512, cmp_ratio=4, coff=2):
+def run_regression_perf(batch=1, seq=8192, hidden=4096, head_dim=512, cmp_ratio=4, coff=2, *, cube_blocks=None):
     dtype = torch.bfloat16
     x, wkv, wgate, _ape = _make_inputs(batch, seq, hidden, head_dim, cmp_ratio, coff, dtype, device="npu")
+    cube_blocks = _resolve_cube_blocks(x.device, cube_blocks)
     groups = batch * seq // cmp_ratio
     window = coff * cmp_ratio
     softmax = torch.softmax(torch.randn(groups, window, head_dim, device="npu"), dim=1)
     kv = torch.randn(groups, window, head_dim, device="npu")
     d_cmp = torch.randn(groups, head_dim, device="npu", dtype=dtype)
-    # Compile and complete the first launch before entering the benchmark.
-    compressor_bwd(x, wkv, wgate, d_cmp, softmax, kv, cmp_ratio=cmp_ratio, coff=coff)
-    torch.npu.synchronize()
-
     def launch():
-        return compressor_bwd(x, wkv, wgate, d_cmp, softmax, kv, cmp_ratio=cmp_ratio, coff=coff)
+        return compressor_bwd(x, wkv, wgate, d_cmp, softmax, kv, cmp_ratio=cmp_ratio, coff=coff, cube_blocks=cube_blocks)
 
+    # Compile and complete the first launch before entering the benchmark.
+    launch()
+    torch.npu.synchronize()
     latency = do_bench(launch, backend="msprof", _n_warmup=10, _n_repeat=20)
     tokens = batch * seq
     compress_dim = coff * head_dim
     flops = 8.0 * tokens * compress_dim * hidden
     tflops = flops / (latency * 1e9)
     print(
-        f"compressor_bwd (T={tokens}, H={hidden}, D={head_dim}, coff={coff}, ratio={cmp_ratio}): "
+        f"compressor_bwd (T={tokens}, H={hidden}, D={head_dim}, coff={coff}, ratio={cmp_ratio}, cube_blocks={cube_blocks}): "
         f"{latency * 1000:.2f} us | {tflops:.1f} TFLOPS"
     )
     return latency
@@ -275,9 +291,10 @@ def run_regression_perf(batch=1, seq=8192, hidden=4096, head_dim=512, cmp_ratio=
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bench", action=argparse.BooleanOptionalAction, default=True, help="benchmark after correctness checks")
+    parser.add_argument("--cube-blocks", type=int, help="override the detected AIC count for comparison runs")
     args = parser.parse_args()
-    run_correctness()
-    run_correctness(seq=256, head_dim=512, coff=1, cmp_ratio=128)
-    run_correctness(batch=2, seq=128, dtype=torch.float16, seqused=[64, 128], start_pos=[1, 0], packed=True)
+    run_correctness(cube_blocks=args.cube_blocks)
+    run_correctness(seq=256, head_dim=512, coff=1, cmp_ratio=128, cube_blocks=args.cube_blocks)
+    run_correctness(batch=2, seq=128, dtype=torch.float16, seqused=[64, 128], start_pos=[1, 0], packed=True, cube_blocks=args.cube_blocks)
     if args.bench:
-        run_regression_perf()
+        run_regression_perf(cube_blocks=args.cube_blocks)
