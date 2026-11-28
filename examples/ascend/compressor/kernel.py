@@ -259,8 +259,8 @@ def compressor_dx(tokens, hidden, compress_dim, dtype, cube_blocks=NUM_CORES):
 
 
 def compressor_dw(tokens, hidden, compress_dim, dtype, cube_blocks=NUM_CORES):
-    """``dWkv = dKv^T @ X`` and ``dWgate = dScore^T @ X`` on one accumulator."""
-    tile_m = 256 if compress_dim % 256 == 0 else 128
+    """Compute dWkv and dWgate while sharing each X tile in L1."""
+    tile_m = 128
     tile_n = 256
     tile_k = 256
     if tokens % tile_k or hidden % tile_n or compress_dim % tile_m:
@@ -274,29 +274,6 @@ def compressor_dw(tokens, hidden, compress_dim, dtype, cube_blocks=NUM_CORES):
     uf_mid = 2
     uf_last = 3
 
-    @T.macro
-    def acc_dw(d_new, out, x, a_l1, b_l1, res, m_tile, n_tile):
-        for kt in T.Pipelined(k_tiles, num_stages=stages):
-            T.copy(
-                d_new[kt * tile_k : (kt + 1) * tile_k, m_tile * tile_m : (m_tile + 1) * tile_m],
-                a_l1,
-                transpose=True,
-            )
-            T.copy(
-                x[kt * tile_k : (kt + 1) * tile_k, n_tile * tile_n : (n_tile + 1) * tile_n],
-                b_l1,
-                transpose=True,
-            )
-            T.gemm(
-                a_l1,
-                b_l1,
-                res,
-                transpose_B=True,
-                clear_accum=kt == 0,
-                unit_flag_ctrl=T.Select(kt == k_tiles - 1, uf_last, uf_mid),
-            )
-        T.copy(res, out[m_tile * tile_m, n_tile * tile_n], unit_flag_ctrl=uf_last)
-
     @T.prim_func
     def main(
         d_kv: T.Tensor((tokens, compress_dim), dtype),
@@ -306,13 +283,38 @@ def compressor_dw(tokens, hidden, compress_dim, dtype, cube_blocks=NUM_CORES):
         d_wgate: T.Tensor((compress_dim, hidden), dtype),
     ):
         with T.Kernel(cube_blocks) as bx:
-            a_l1 = T.alloc_l1((tile_m, tile_k), dtype)
-            b_l1 = T.alloc_l1((tile_n, tile_k), dtype)
-            res = T.alloc_l0c((tile_m, tile_n), "float32")
+            kv_l1 = T.alloc_l1((tile_m, tile_k), dtype)
+            score_l1 = T.alloc_l1((tile_m, tile_k), dtype)
+            x_l1 = T.alloc_l1((tile_n, tile_k), dtype)
+            res_kv = T.alloc_l0c((tile_m, tile_n), "float32")
+            res_score = T.alloc_l0c((tile_m, tile_n), "float32")
             for tile_idx in T.Persistent([out_tiles], cube_blocks, bx):
                 m_tile, n_tile = aswt_swizzle(tile_idx)
-                # The second pass rereads this N-slice of X while it is still hot in L2.
-                acc_dw(d_kv, d_wkv, x, a_l1, b_l1, res, m_tile, n_tile)
-                acc_dw(d_score, d_wgate, x, a_l1, b_l1, res, m_tile, n_tile)
+                m0 = m_tile * tile_m
+                n0 = n_tile * tile_n
+                for kt in T.Pipelined(k_tiles, num_stages=stages):
+                    k0 = kt * tile_k
+                    T.copy(d_kv[k0 : k0 + tile_k, m0 : m0 + tile_m], kv_l1, transpose=True)
+                    T.copy(d_score[k0 : k0 + tile_k, m0 : m0 + tile_m], score_l1, transpose=True)
+                    T.copy(x[k0 : k0 + tile_k, n0 : n0 + tile_n], x_l1, transpose=True)
+                    unit_flag = T.Select(kt == k_tiles - 1, uf_last, uf_mid)
+                    T.gemm(
+                        kv_l1,
+                        x_l1,
+                        res_kv,
+                        transpose_B=True,
+                        clear_accum=kt == 0,
+                        unit_flag_ctrl=unit_flag,
+                    )
+                    T.gemm(
+                        score_l1,
+                        x_l1,
+                        res_score,
+                        transpose_B=True,
+                        clear_accum=kt == 0,
+                        unit_flag_ctrl=unit_flag,
+                    )
+                T.copy(res_kv, d_wkv[m0 : m0 + tile_m, n0 : n0 + tile_n], unit_flag_ctrl=uf_last)
+                T.copy(res_score, d_wgate[m0 : m0 + tile_m, n0 : n0 + tile_n], unit_flag_ctrl=uf_last)
 
     return main
