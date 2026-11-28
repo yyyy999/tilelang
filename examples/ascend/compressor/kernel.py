@@ -93,9 +93,8 @@ def compressor_scatter(num_groups, tokens, head_dim, cmp_ratio, coff, dtype):
                             with T.SimtVF(threads=threads):
                                 for col in T.Parallel(d_tile):
                                     dc_fp[col] = T.Cast("float32", dc_bf[col])
-                            for row in T.serial(window):
-                                T.copy(score[group, row, d0 : d0 + d_tile], score_ub[row, 0:d_tile])
-                                T.copy(kv[group, row, d0 : d0 + d_tile], kv_ub[row, 0:d_tile])
+                            T.copy(score[group, 0:window, d0 : d0 + d_tile], score_ub)
+                            T.copy(kv[group, 0:window, d0 : d0 + d_tile], kv_ub)
                             with T.SimtVF(threads=threads):
                                 for col in T.Parallel(d_tile):
                                     acc = T.alloc_var("float32", init=T.float32(0))
